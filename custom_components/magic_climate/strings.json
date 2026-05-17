@@ -1,0 +1,63 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Magic Climate",
+        "description": "Wrap a climate entity to add UI-configured presets.",
+        "data": {
+          "source_entity_id": "Source climate entity",
+          "name": "Display name (optional)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This source entity is already wrapped by Magic Climate."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Magic Climate presets",
+        "menu_options": {
+          "add": "Add preset",
+          "edit": "Edit preset",
+          "delete": "Delete preset",
+          "save": "Save and exit"
+        }
+      },
+      "add": {
+        "title": "Add preset",
+        "data": {
+          "name": "Preset name",
+          "low": "Low temperature (°C)",
+          "high": "High temperature (°C)",
+          "mode": "Force HVAC mode (optional)",
+          "fan": "Force fan mode (optional)"
+        }
+      },
+      "edit": {
+        "title": "Edit which preset?",
+        "data": {"name": "Preset"}
+      },
+      "edit_fields": {
+        "title": "Edit preset",
+        "data": {
+          "name": "Preset name",
+          "low": "Low temperature (°C)",
+          "high": "High temperature (°C)",
+          "mode": "Force HVAC mode (optional)",
+          "fan": "Force fan mode (optional)"
+        }
+      },
+      "delete": {
+        "title": "Delete which preset?",
+        "data": {"name": "Preset"}
+      }
+    },
+    "error": {
+      "name_required": "Preset name is required.",
+      "name_taken": "A preset with this name already exists.",
+      "low_not_below_high": "Low temperature must be less than high temperature."
+    }
+  }
+}
