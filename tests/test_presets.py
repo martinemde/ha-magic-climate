@@ -106,3 +106,32 @@ def test_compute_service_data_unknown_mode_returns_empty():
     """An unrecognized mode is treated as 'don't push temperature'."""
     p = Preset(name="Home", low=18.0, high=25.0)
     assert compute_service_data(p, effective_mode="snowflake") == {}
+
+
+def test_preset_to_dict():
+    p = Preset(name="Sleep", low=16.0, high=21.0, mode="heat_cool", fan="auto")
+    assert p.to_dict() == {
+        "name": "Sleep",
+        "low": 16.0,
+        "high": 21.0,
+        "mode": "heat_cool",
+        "fan": "auto",
+    }
+
+
+def test_preset_to_dict_omits_none_optionals():
+    p = Preset(name="Sleep", low=16.0, high=21.0)
+    assert p.to_dict() == {"name": "Sleep", "low": 16.0, "high": 21.0}
+
+
+def test_preset_from_dict():
+    p = Preset.from_dict({"name": "Sleep", "low": 16.0, "high": 21.0})
+    assert p == Preset(name="Sleep", low=16.0, high=21.0)
+
+
+def test_preset_from_dict_with_optionals():
+    p = Preset.from_dict({
+        "name": "Away", "low": 14.5, "high": 28.0,
+        "mode": "heat_cool", "fan": "auto",
+    })
+    assert p == Preset(name="Away", low=14.5, high=28.0, mode="heat_cool", fan="auto")

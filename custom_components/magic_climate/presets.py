@@ -32,6 +32,24 @@ class Preset:
         if not (self.low < self.high):
             raise PresetValidationError("low must be < high")
 
+    def to_dict(self) -> dict:
+        d: dict = {"name": self.name, "low": self.low, "high": self.high}
+        if self.mode is not None:
+            d["mode"] = self.mode
+        if self.fan is not None:
+            d["fan"] = self.fan
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Preset":
+        return cls(
+            name=data["name"],
+            low=float(data["low"]),
+            high=float(data["high"]),
+            mode=data.get("mode"),
+            fan=data.get("fan"),
+        )
+
 
 # HVAC mode string constants — match Home Assistant's HVACMode enum values.
 MODE_HEAT_COOL = "heat_cool"
