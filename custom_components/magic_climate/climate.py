@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import CONF_PRESETS, CONF_SOURCE_ENTITY_ID, DOMAIN
-from .presets import Preset
+from .presets import Preset, compute_service_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -255,6 +255,50 @@ class MagicClimate(ClimateEntity):
             {"entity_id": self._source_entity_id, "swing_mode": swing_mode},
             blocking=True,
         )
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        preset = next((p for p in self._presets if p.name == preset_mode), None)
+        if preset is None:
+            _LOGGER.warning("Unknown preset: %r", preset_mode)
+            return
+
+        # Decide effective mode: explicit override, else source's current mode.
+        effective_mode = preset.mode
+        if effective_mode is None:
+            current = self.hvac_mode
+            effective_mode = current.value if current is not None else "off"
+
+        # 1. Push mode change first (if the preset declares one).
+        if preset.mode is not None and self.hvac_mode != HVACMode(preset.mode):
+            await self.hass.services.async_call(
+                "climate", "set_hvac_mode",
+                {"entity_id": self._source_entity_id, "hvac_mode": preset.mode},
+                blocking=True,
+            )
+
+        # 2. Push temperatures, denormalized for the source unit.
+        temp_kwargs = compute_service_data(preset, effective_mode)
+        if temp_kwargs:
+            data: dict[str, Any] = {"entity_id": self._source_entity_id}
+            for key, val in temp_kwargs.items():
+                if key in ("temperature", "target_temp_low", "target_temp_high"):
+                    data[key] = self._denormalize_temp(val)
+                else:
+                    data[key] = val
+            await self.hass.services.async_call(
+                "climate", "set_temperature", data, blocking=True,
+            )
+
+        # 3. Push fan (if declared).
+        if preset.fan is not None and self.fan_mode != preset.fan:
+            await self.hass.services.async_call(
+                "climate", "set_fan_mode",
+                {"entity_id": self._source_entity_id, "fan_mode": preset.fan},
+                blocking=True,
+            )
+
+        self._attr_preset_mode = preset_mode
+        self.async_write_ha_state()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         data: dict[str, Any] = {"entity_id": self._source_entity_id}
