@@ -79,3 +79,24 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
             vol.Optional(PRESET_FAN): selector.TextSelector(),
         })
         return self.async_show_form(step_id="add", data_schema=schema, errors=errors)
+
+    async def async_step_delete(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        if not self._presets:
+            return await self.async_step_init()
+
+        if user_input is not None:
+            name = user_input[PRESET_NAME]
+            self._presets = [p for p in self._presets if p[PRESET_NAME] != name]
+            return await self.async_step_init()
+
+        schema = vol.Schema({
+            vol.Required(PRESET_NAME): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[p[PRESET_NAME] for p in self._presets],
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
+        })
+        return self.async_show_form(step_id="delete", data_schema=schema)
