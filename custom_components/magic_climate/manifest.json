@@ -8,6 +8,5 @@
   "config_flow": true,
   "integration_type": "helper",
   "iot_class": "calculated",
-  "requirements": [],
-  "dependencies": ["climate"]
+  "requirements": []
 }
