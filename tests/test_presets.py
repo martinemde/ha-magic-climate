@@ -33,5 +33,10 @@ def test_preset_validates_name_nonempty():
         Preset(name="", low=16.0, high=21.0).validate()
 
 
+def test_preset_validates_name_whitespace_only_rejected():
+    with pytest.raises(PresetValidationError, match="name must be non-empty"):
+        Preset(name="   ", low=16.0, high=21.0).validate()
+
+
 def test_preset_valid_passes_validate():
     Preset(name="Sleep", low=16.0, high=21.0).validate()  # no exception

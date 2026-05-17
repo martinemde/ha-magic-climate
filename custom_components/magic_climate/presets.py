@@ -15,6 +15,9 @@ class Preset:
 
     A preset always declares a low/high temperature band. Mode and fan are
     optional — when set, they are pushed to the source before the temps.
+
+    Construction does not validate. Call `validate()` at trust boundaries
+    (loading from config storage, options-flow submit).
     """
 
     name: str
