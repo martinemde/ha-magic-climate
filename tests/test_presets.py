@@ -90,3 +90,19 @@ def test_compute_service_data_dry_uses_high():
     p = Preset(name="Eco", low=15.5, high=26.5)
     data = compute_service_data(p, effective_mode="dry")
     assert data == {"temperature": 26.5}
+
+
+def test_compute_service_data_fan_only_no_temp():
+    p = Preset(name="Home", low=18.0, high=25.0)
+    assert compute_service_data(p, effective_mode="fan_only") == {}
+
+
+def test_compute_service_data_off_no_temp():
+    p = Preset(name="Home", low=18.0, high=25.0)
+    assert compute_service_data(p, effective_mode="off") == {}
+
+
+def test_compute_service_data_unknown_mode_returns_empty():
+    """An unrecognized mode is treated as 'don't push temperature'."""
+    p = Preset(name="Home", low=18.0, high=25.0)
+    assert compute_service_data(p, effective_mode="snowflake") == {}

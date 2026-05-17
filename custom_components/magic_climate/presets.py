@@ -68,4 +68,5 @@ def compute_service_data(preset: Preset, effective_mode: str) -> dict:
         return {"temperature": preset.high}
     if effective_mode == MODE_DRY:
         return {"temperature": preset.high}
-    raise NotImplementedError(f"Effective mode {effective_mode!r} not yet handled")
+    # MODE_FAN_ONLY, MODE_OFF, and anything unrecognized: no temperature push.
+    return {}
