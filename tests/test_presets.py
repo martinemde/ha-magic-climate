@@ -60,3 +60,15 @@ def test_compute_service_data_heat_cool_with_mode_override():
     assert "hvac_mode" not in data
     assert data["target_temp_low"] == 14.5
     assert data["target_temp_high"] == 28.0
+
+
+def test_compute_service_data_auto_uses_midpoint():
+    p = Preset(name="Sleep", low=16.0, high=21.0)
+    data = compute_service_data(p, effective_mode="auto")
+    assert data == {"temperature": 18.5}
+
+
+def test_compute_service_data_auto_asymmetric_band():
+    p = Preset(name="Eco", low=15.5, high=26.5)
+    data = compute_service_data(p, effective_mode="auto")
+    assert data == {"temperature": 21.0}
