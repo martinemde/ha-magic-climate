@@ -130,7 +130,8 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
     async def async_step_edit_fields(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        assert self._editing_index is not None
+        if self._editing_index is None:
+            return await self.async_step_init()
         original = self._presets[self._editing_index]
         errors: dict[str, str] = {}
 

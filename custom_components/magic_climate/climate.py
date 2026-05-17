@@ -121,7 +121,9 @@ class MagicClimate(ClimateEntity):
 
     @property
     def temperature_unit(self) -> str:
-        # Always report °C — _normalize_temp normalizes internally in Task 16.
+        # Always report °C. Source temperatures are normalized internally
+        # (see _normalize_temp / _denormalize_temp) so HA does not apply a
+        # second Fahrenheit conversion on top of the source's values.
         return UnitOfTemperature.CELSIUS
 
     @property
@@ -175,14 +177,18 @@ class MagicClimate(ClimateEntity):
 
     @property
     def min_temp(self) -> float:
-        if self._source_state and "min_temp" in self._source_state.attributes:
-            return self._normalize_temp(self._source_state.attributes["min_temp"])
+        if self._source_state:
+            val = self._source_state.attributes.get("min_temp")
+            if val is not None:
+                return self._normalize_temp(val)
         return 7.0
 
     @property
     def max_temp(self) -> float:
-        if self._source_state and "max_temp" in self._source_state.attributes:
-            return self._normalize_temp(self._source_state.attributes["max_temp"])
+        if self._source_state:
+            val = self._source_state.attributes.get("max_temp")
+            if val is not None:
+                return self._normalize_temp(val)
         return 35.0
 
     @property
@@ -210,8 +216,7 @@ class MagicClimate(ClimateEntity):
     def hvac_action(self) -> HVACAction | None:
         if not self._source_state:
             return None
-        raw = self._source_state.attributes.get("hvac_action") \
-            or self._source_state.attributes.get("action")
+        raw = self._source_state.attributes.get("hvac_action")
         if raw is None:
             return None
         try:
@@ -322,15 +327,21 @@ class MagicClimate(ClimateEntity):
                 blocking=True,
             )
 
-        # 2. Push temperatures, denormalized for the source unit.
+        # 2. Push temperatures, denormalized for the source unit. The source-
+        # unit values are what the source will echo back on its next state
+        # event, so store those for drift comparison too.
         temp_kwargs = compute_service_data(preset, effective_mode)
+        pushed_temp_kwargs: dict[str, Any] = {}
         if temp_kwargs:
             data: dict[str, Any] = {"entity_id": self._source_entity_id}
             for key, val in temp_kwargs.items():
                 if key in ("temperature", "target_temp_low", "target_temp_high"):
-                    data[key] = self._denormalize_temp(val)
+                    pushed = self._denormalize_temp(val)
+                    data[key] = pushed
+                    pushed_temp_kwargs[key] = pushed
                 else:
                     data[key] = val
+                    pushed_temp_kwargs[key] = val
             await self.hass.services.async_call(
                 "climate", "set_temperature", data, blocking=True,
             )
@@ -345,7 +356,7 @@ class MagicClimate(ClimateEntity):
 
         self._pending_apply = {
             "mode": preset.mode if preset.mode is not None else effective_mode,
-            "temp_kwargs": dict(temp_kwargs),
+            "temp_kwargs": dict(pushed_temp_kwargs),
             "fan": preset.fan,
         }
         self._pending_apply_deadline = time.monotonic() + APPLY_GUARD_SECONDS
