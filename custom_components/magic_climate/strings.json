@@ -17,46 +17,98 @@
   "options": {
     "step": {
       "init": {
-        "title": "Magic Climate presets",
+        "title": "Magic Climate",
         "menu_options": {
-          "add": "Add preset",
-          "edit": "Edit preset",
-          "delete": "Delete preset",
+          "basic": "Basic Options",
+          "preset_home": "Home Preset",
+          "preset_away": "Away Preset",
+          "preset_sleep": "Sleep Preset",
+          "preset_eco": "Eco Preset",
+          "preset_comfort": "Comfort Preset",
+          "preset_boost": "Boost Preset",
+          "preset_activity": "Activity Preset",
           "save": "Save and exit"
         }
       },
-      "add": {
-        "title": "Add preset",
+      "basic": {
+        "title": "Basic Options",
+        "description": "Pick the climate entity to wrap, and choose which standard presets to expose.",
         "data": {
-          "name": "Preset name",
-          "low": "Low temperature (°C)",
-          "high": "High temperature (°C)",
+          "source_entity_id": "Target climate entity",
+          "home": "Home",
+          "away": "Away",
+          "sleep": "Sleep",
+          "eco": "Eco",
+          "comfort": "Comfort",
+          "boost": "Boost",
+          "activity": "Activity"
+        }
+      },
+      "preset_home": {
+        "title": "Home Preset",
+        "data": {
+          "low": "Low temperature",
+          "high": "High temperature",
           "mode": "Force HVAC mode (optional)",
           "fan": "Force fan mode (optional)"
         }
       },
-      "edit": {
-        "title": "Edit which preset?",
-        "data": {"name": "Preset"}
-      },
-      "edit_fields": {
-        "title": "Edit preset",
+      "preset_away": {
+        "title": "Away Preset",
         "data": {
-          "name": "Preset name",
-          "low": "Low temperature (°C)",
-          "high": "High temperature (°C)",
+          "low": "Low temperature",
+          "high": "High temperature",
           "mode": "Force HVAC mode (optional)",
           "fan": "Force fan mode (optional)"
         }
       },
-      "delete": {
-        "title": "Delete which preset?",
-        "data": {"name": "Preset"}
+      "preset_sleep": {
+        "title": "Sleep Preset",
+        "data": {
+          "low": "Low temperature",
+          "high": "High temperature",
+          "mode": "Force HVAC mode (optional)",
+          "fan": "Force fan mode (optional)"
+        }
+      },
+      "preset_eco": {
+        "title": "Eco Preset",
+        "data": {
+          "low": "Low temperature",
+          "high": "High temperature",
+          "mode": "Force HVAC mode (optional)",
+          "fan": "Force fan mode (optional)"
+        }
+      },
+      "preset_comfort": {
+        "title": "Comfort Preset",
+        "data": {
+          "low": "Low temperature",
+          "high": "High temperature",
+          "mode": "Force HVAC mode (optional)",
+          "fan": "Force fan mode (optional)"
+        }
+      },
+      "preset_boost": {
+        "title": "Boost Preset",
+        "data": {
+          "low": "Low temperature",
+          "high": "High temperature",
+          "mode": "Force HVAC mode (optional)",
+          "fan": "Force fan mode (optional)"
+        }
+      },
+      "preset_activity": {
+        "title": "Activity Preset",
+        "data": {
+          "low": "Low temperature",
+          "high": "High temperature",
+          "mode": "Force HVAC mode (optional)",
+          "fan": "Force fan mode (optional)"
+        }
       }
     },
     "error": {
-      "name_required": "Preset name is required.",
-      "name_taken": "A preset with this name already exists.",
       "low_not_below_high": "Low temperature must be less than high temperature."
     }
   }
