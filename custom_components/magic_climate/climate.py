@@ -11,7 +11,8 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import CONF_SOURCE_ENTITY_ID, DOMAIN
+from .const import CONF_PRESETS, CONF_SOURCE_ENTITY_ID, DOMAIN
+from .presets import Preset
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,6 +50,10 @@ class MagicClimate(ClimateEntity):
         self._attr_name = name or source_entity_id
         self._attr_unique_id = f"{DOMAIN}::{source_entity_id}"
         self._source_state = None
+        self._presets: list[Preset] = [
+            Preset.from_dict(p) for p in entry.options.get(CONF_PRESETS, [])
+        ]
+        self._attr_preset_mode: str | None = None
 
     async def async_added_to_hass(self) -> None:
         self._source_state = self.hass.states.get(self._source_entity_id)
@@ -193,6 +198,16 @@ class MagicClimate(ClimateEntity):
         return None
 
     @property
+    def preset_modes(self) -> list[str] | None:
+        if not self._presets:
+            return None
+        return [p.name for p in self._presets]
+
+    @property
+    def preset_mode(self) -> str | None:
+        return self._attr_preset_mode
+
+    @property
     def supported_features(self) -> ClimateEntityFeature:
         if not self._source_state:
             return ClimateEntityFeature(0)
@@ -214,6 +229,9 @@ class MagicClimate(ClimateEntity):
             features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
         else:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE
+
+        if self._presets:
+            features |= ClimateEntityFeature.PRESET_MODE
 
         return ClimateEntityFeature(features)
 
