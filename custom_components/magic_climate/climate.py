@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.climate import ClimateEntity
+from homeassistant.components.climate import ClimateEntity, HVACAction, HVACMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTemperature
@@ -117,3 +117,61 @@ class MagicClimate(ClimateEntity):
         if self._source_state and "max_temp" in self._source_state.attributes:
             return self._source_state.attributes["max_temp"]
         return 35.0
+
+    @property
+    def hvac_mode(self) -> HVACMode | None:
+        if not self._source_state:
+            return None
+        try:
+            return HVACMode(self._source_state.state)
+        except ValueError:
+            return None
+
+    @property
+    def hvac_modes(self) -> list[HVACMode]:
+        if not self._source_state:
+            return []
+        out: list[HVACMode] = []
+        for raw in self._source_state.attributes.get("hvac_modes", []) or []:
+            try:
+                out.append(HVACMode(raw))
+            except ValueError:
+                _LOGGER.debug("Unknown hvac_mode from source: %r", raw)
+        return out
+
+    @property
+    def hvac_action(self) -> HVACAction | None:
+        if not self._source_state:
+            return None
+        raw = self._source_state.attributes.get("hvac_action") \
+            or self._source_state.attributes.get("action")
+        if raw is None:
+            return None
+        try:
+            return HVACAction(raw)
+        except ValueError:
+            return None
+
+    @property
+    def fan_mode(self) -> str | None:
+        if self._source_state:
+            return self._source_state.attributes.get("fan_mode")
+        return None
+
+    @property
+    def fan_modes(self) -> list[str] | None:
+        if self._source_state:
+            return self._source_state.attributes.get("fan_modes")
+        return None
+
+    @property
+    def swing_mode(self) -> str | None:
+        if self._source_state:
+            return self._source_state.attributes.get("swing_mode")
+        return None
+
+    @property
+    def swing_modes(self) -> list[str] | None:
+        if self._source_state:
+            return self._source_state.attributes.get("swing_modes")
+        return None
