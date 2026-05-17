@@ -31,3 +31,31 @@ class Preset:
             raise PresetValidationError("name must be non-empty")
         if not (self.low < self.high):
             raise PresetValidationError("low must be < high")
+
+
+# HVAC mode string constants — match Home Assistant's HVACMode enum values.
+MODE_HEAT_COOL = "heat_cool"
+MODE_AUTO = "auto"
+MODE_HEAT = "heat"
+MODE_COOL = "cool"
+MODE_DRY = "dry"
+MODE_FAN_ONLY = "fan_only"
+MODE_OFF = "off"
+
+
+def compute_service_data(preset: Preset, effective_mode: str) -> dict:
+    """Translate a preset's low/high into source service-call kwargs.
+
+    Returns the kwargs for the climate.set_temperature service. Does NOT
+    include hvac_mode — the caller is responsible for issuing
+    set_hvac_mode separately when the preset overrides the mode.
+
+    Returns an empty dict for modes that don't accept a temperature
+    (FAN_ONLY, OFF).
+    """
+    if effective_mode == MODE_HEAT_COOL:
+        return {
+            "target_temp_low": preset.low,
+            "target_temp_high": preset.high,
+        }
+    raise NotImplementedError(f"Effective mode {effective_mode!r} not yet handled")

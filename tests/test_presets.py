@@ -40,3 +40,23 @@ def test_preset_validates_name_whitespace_only_rejected():
 
 def test_preset_valid_passes_validate():
     Preset(name="Sleep", low=16.0, high=21.0).validate()  # no exception
+
+
+from custom_components.magic_climate.presets import compute_service_data
+
+
+def test_compute_service_data_heat_cool():
+    p = Preset(name="Away", low=14.5, high=28.0)
+    data = compute_service_data(p, effective_mode="heat_cool")
+    assert data == {
+        "target_temp_low": 14.5,
+        "target_temp_high": 28.0,
+    }
+
+
+def test_compute_service_data_heat_cool_with_mode_override():
+    p = Preset(name="Away", low=14.5, high=28.0, mode="heat_cool")
+    data = compute_service_data(p, effective_mode="heat_cool")
+    assert "hvac_mode" not in data
+    assert data["target_temp_low"] == 14.5
+    assert data["target_temp_high"] == 28.0
