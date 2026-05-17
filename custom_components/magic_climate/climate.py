@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.climate import ClimateEntity, HVACAction, HVACMode
+from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACAction, HVACMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTemperature
 from homeassistant.core import Event, HomeAssistant, callback
@@ -191,6 +191,31 @@ class MagicClimate(ClimateEntity):
         if self._source_state:
             return self._source_state.attributes.get("swing_modes")
         return None
+
+    @property
+    def supported_features(self) -> ClimateEntityFeature:
+        if not self._source_state:
+            return ClimateEntityFeature(0)
+
+        source_features = self._source_state.attributes.get("supported_features", 0)
+
+        # Drop both temperature flags and decide fresh.
+        features = source_features & ~ClimateEntityFeature.TARGET_TEMPERATURE
+        features = features & ~ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+
+        source_supports_dual = bool(
+            source_features & ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+        ) and HVACMode.HEAT_COOL in self.hvac_modes
+
+        if source_supports_dual and (
+            self.hvac_mode == HVACMode.HEAT_COOL
+            or (self.hvac_mode == HVACMode.OFF and HVACMode.HEAT_COOL in self.hvac_modes)
+        ):
+            features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+        else:
+            features |= ClimateEntityFeature.TARGET_TEMPERATURE
+
+        return ClimateEntityFeature(features)
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         await self.hass.services.async_call(
