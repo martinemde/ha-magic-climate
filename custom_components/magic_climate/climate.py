@@ -175,3 +175,24 @@ class MagicClimate(ClimateEntity):
         if self._source_state:
             return self._source_state.attributes.get("swing_modes")
         return None
+
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        await self.hass.services.async_call(
+            "climate", "set_hvac_mode",
+            {"entity_id": self._source_entity_id, "hvac_mode": hvac_mode},
+            blocking=True,
+        )
+
+    async def async_set_fan_mode(self, fan_mode: str) -> None:
+        await self.hass.services.async_call(
+            "climate", "set_fan_mode",
+            {"entity_id": self._source_entity_id, "fan_mode": fan_mode},
+            blocking=True,
+        )
+
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
+        await self.hass.services.async_call(
+            "climate", "set_swing_mode",
+            {"entity_id": self._source_entity_id, "swing_mode": swing_mode},
+            blocking=True,
+        )
