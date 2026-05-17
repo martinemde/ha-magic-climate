@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACAction, HVACMode
@@ -11,7 +12,7 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import CONF_PRESETS, CONF_SOURCE_ENTITY_ID, DOMAIN
+from .const import APPLY_GUARD_SECONDS, CONF_PRESETS, CONF_SOURCE_ENTITY_ID, DOMAIN, DRIFT_TOLERANCE
 from .presets import Preset, compute_service_data
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,6 +55,10 @@ class MagicClimate(ClimateEntity):
             Preset.from_dict(p) for p in entry.options.get(CONF_PRESETS, [])
         ]
         self._attr_preset_mode: str | None = None
+        # Tracks the state the wrapper just pushed; used to suppress drift
+        # detection while the source confirms each setting.
+        self._pending_apply: dict[str, Any] | None = None
+        self._pending_apply_deadline: float = 0.0
 
     async def async_added_to_hass(self) -> None:
         self._source_state = self.hass.states.get(self._source_entity_id)
@@ -66,7 +71,48 @@ class MagicClimate(ClimateEntity):
     @callback
     def _handle_source_change(self, event: Event) -> None:
         self._source_state = event.data.get("new_state")
+
+        if self._attr_preset_mode is not None:
+            if self._still_within_guard_window():
+                # Wrapper-initiated change; do not clear preset_mode.
+                pass
+            elif self._has_drifted():
+                self._attr_preset_mode = None
+                self._pending_apply = None
+
         self.async_write_ha_state()
+
+    def _still_within_guard_window(self) -> bool:
+        return (
+            self._pending_apply is not None
+            and time.monotonic() < self._pending_apply_deadline
+        )
+
+    def _has_drifted(self) -> bool:
+        """True if the source's reported state no longer matches what we pushed."""
+        if self._pending_apply is None or self._source_state is None:
+            return False
+
+        expected = self._pending_apply
+        attrs = self._source_state.attributes
+
+        # Mode check
+        if expected["mode"] is not None and self._source_state.state != expected["mode"]:
+            return True
+
+        # Temperature check
+        for key, expected_val in expected["temp_kwargs"].items():
+            actual = attrs.get(key)
+            if actual is None:
+                continue  # source doesn't expose this attribute in this mode
+            if abs(actual - expected_val) > DRIFT_TOLERANCE:
+                return True
+
+        # Fan check
+        if expected["fan"] is not None and attrs.get("fan_mode") != expected["fan"]:
+            return True
+
+        return False
 
     @property
     def available(self) -> bool:
@@ -297,6 +343,12 @@ class MagicClimate(ClimateEntity):
                 blocking=True,
             )
 
+        self._pending_apply = {
+            "mode": preset.mode if preset.mode is not None else effective_mode,
+            "temp_kwargs": dict(temp_kwargs),
+            "fan": preset.fan,
+        }
+        self._pending_apply_deadline = time.monotonic() + APPLY_GUARD_SECONDS
         self._attr_preset_mode = preset_mode
         self.async_write_ha_state()
 
