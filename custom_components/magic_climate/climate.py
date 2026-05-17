@@ -12,10 +12,41 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import APPLY_GUARD_SECONDS, CONF_PRESETS, CONF_SOURCE_ENTITY_ID, DOMAIN, DRIFT_TOLERANCE
-from .presets import Preset, compute_service_data
+from .const import (
+    APPLY_GUARD_SECONDS,
+    CONF_ENABLED_PRESETS,
+    CONF_PRESETS,
+    CONF_SOURCE_ENTITY_ID,
+    DOMAIN,
+    DRIFT_TOLERANCE,
+    STANDARD_PRESETS,
+)
+from .presets import Preset, PresetValidationError, compute_service_data
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _load_presets(entry: ConfigEntry) -> list[Preset]:
+    """Build the Preset list from entry options, filtering to enabled+valid."""
+    options = entry.options or {}
+    enabled = set(options.get(CONF_ENABLED_PRESETS, []) or [])
+    stored = options.get(CONF_PRESETS, {}) or {}
+    presets: list[Preset] = []
+    # STANDARD_PRESETS preserves UI ordering.
+    for pid in STANDARD_PRESETS:
+        if pid not in enabled:
+            continue
+        raw = stored.get(pid)
+        if not raw:
+            continue
+        try:
+            preset = Preset.from_dict({"name": pid, **raw})
+            preset.validate()
+        except (PresetValidationError, KeyError, TypeError, ValueError) as err:
+            _LOGGER.warning("Skipping invalid preset %r: %s", pid, err)
+            continue
+        presets.append(preset)
+    return presets
 
 
 async def async_setup_entry(
@@ -49,11 +80,9 @@ class MagicClimate(ClimateEntity):
         self._entry = entry
         self._source_entity_id = source_entity_id
         self._attr_name = name or source_entity_id
-        self._attr_unique_id = f"{DOMAIN}::{source_entity_id}"
+        self._attr_unique_id = f"{DOMAIN}::{entry.entry_id}"
         self._source_state = None
-        self._presets: list[Preset] = [
-            Preset.from_dict(p) for p in entry.options.get(CONF_PRESETS, [])
-        ]
+        self._presets: list[Preset] = _load_presets(entry)
         self._attr_preset_mode: str | None = None
         # Tracks the state the wrapper just pushed; used to suppress drift
         # detection while the source confirms each setting.

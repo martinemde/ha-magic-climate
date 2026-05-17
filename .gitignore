@@ -17,3 +17,4 @@ venv/
 
 # jj
 .jj/
+uv.lock

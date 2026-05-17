@@ -9,13 +9,28 @@ from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .const import CONF_SOURCE_ENTITY_ID, DOMAIN
+from .const import (
+    CONF_ENABLED_PRESETS,
+    CONF_PRESETS,
+    CONF_SOURCE_ENTITY_ID,
+    DEFAULT_ENABLED_PRESETS,
+    DOMAIN,
+    PRESET_DEFAULTS,
+)
+
+
+def initial_options() -> dict[str, Any]:
+    """Default options for a freshly created entry."""
+    return {
+        CONF_ENABLED_PRESETS: list(DEFAULT_ENABLED_PRESETS),
+        CONF_PRESETS: {pid: dict(defaults) for pid, defaults in PRESET_DEFAULTS.items()},
+    }
 
 
 class MagicClimateConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Initial setup: pick a source climate entity and a display name."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -32,7 +47,7 @@ class MagicClimateConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_SOURCE_ENTITY_ID: source_id,
                     CONF_NAME: user_input.get(CONF_NAME),
                 },
-                options={"presets": []},
+                options=initial_options(),
             )
 
         schema = vol.Schema({
