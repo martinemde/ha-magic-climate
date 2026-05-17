@@ -196,3 +196,12 @@ class MagicClimate(ClimateEntity):
             {"entity_id": self._source_entity_id, "swing_mode": swing_mode},
             blocking=True,
         )
+
+    async def async_set_temperature(self, **kwargs: Any) -> None:
+        data: dict[str, Any] = {"entity_id": self._source_entity_id}
+        for key in ("temperature", "target_temp_low", "target_temp_high", "hvac_mode"):
+            if key in kwargs:
+                data[key] = kwargs[key]
+        await self.hass.services.async_call(
+            "climate", "set_temperature", data, blocking=True,
+        )
