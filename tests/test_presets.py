@@ -72,3 +72,21 @@ def test_compute_service_data_auto_asymmetric_band():
     p = Preset(name="Eco", low=15.5, high=26.5)
     data = compute_service_data(p, effective_mode="auto")
     assert data == {"temperature": 21.0}
+
+
+def test_compute_service_data_heat_uses_low():
+    p = Preset(name="Away", low=14.5, high=28.0)
+    data = compute_service_data(p, effective_mode="heat")
+    assert data == {"temperature": 14.5}
+
+
+def test_compute_service_data_cool_uses_high():
+    p = Preset(name="Away", low=14.5, high=28.0)
+    data = compute_service_data(p, effective_mode="cool")
+    assert data == {"temperature": 28.0}
+
+
+def test_compute_service_data_dry_uses_high():
+    p = Preset(name="Eco", low=15.5, high=26.5)
+    data = compute_service_data(p, effective_mode="dry")
+    assert data == {"temperature": 26.5}

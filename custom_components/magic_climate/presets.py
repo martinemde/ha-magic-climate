@@ -62,4 +62,10 @@ def compute_service_data(preset: Preset, effective_mode: str) -> dict:
         # Mitsubishi (and HA's contract) treats AUTO as a single setpoint;
         # the unit applies its own deadband (±4 °C on Mitsubishi).
         return {"temperature": (preset.low + preset.high) / 2.0}
+    if effective_mode == MODE_HEAT:
+        return {"temperature": preset.low}
+    if effective_mode == MODE_COOL:
+        return {"temperature": preset.high}
+    if effective_mode == MODE_DRY:
+        return {"temperature": preset.high}
     raise NotImplementedError(f"Effective mode {effective_mode!r} not yet handled")
