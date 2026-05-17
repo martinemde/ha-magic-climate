@@ -1,0 +1,13 @@
+{
+  "domain": "magic_climate",
+  "name": "Magic Climate",
+  "version": "0.1.0",
+  "documentation": "https://github.com/martinemde/ha-magic-climate",
+  "issue_tracker": "https://github.com/martinemde/ha-magic-climate/issues",
+  "codeowners": ["@martinemde"],
+  "config_flow": true,
+  "integration_type": "helper",
+  "iot_class": "calculated",
+  "requirements": [],
+  "dependencies": ["climate"]
+}
