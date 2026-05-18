@@ -52,32 +52,36 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
         menu_options["save"] = "Save and exit"
         return self.async_show_menu(step_id="init", menu_options=menu_options)
 
-    async def async_step_save(
-        self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.ConfigFlowResult:
-        # Persist only currently-enabled presets in the stored options. Keep
-        # ordering aligned with STANDARD_PRESETS so the UI is stable.
-        stored_presets = {
-            pid: self._presets[pid] for pid in STANDARD_PRESETS if pid in self._enabled
+    def _current_options(self) -> dict[str, Any]:
+        """Snapshot of options as they would be persisted right now."""
+        enabled = [pid for pid in STANDARD_PRESETS if pid in self._enabled]
+        return {
+            CONF_ENABLED_PRESETS: enabled,
+            CONF_PRESETS: {pid: self._presets[pid] for pid in enabled},
         }
-        # Update entry.data if the source entity changed (config flow sets it
-        # there originally; basic options lets the user move the wrapper to a
-        # different climate device without recreating the entry).
+
+    def _persist(self) -> None:
+        """Write current in-memory state to the config entry immediately.
+
+        Each sub-step calls this on submit so changes survive the user
+        closing the dialog without clicking "Save and exit". The update
+        listener reloads the climate entity so newly enabled presets show
+        up in the picker right away.
+        """
+        update_kwargs: dict[str, Any] = {"options": self._current_options()}
         if self._source_entity_id != self._entry.data.get(CONF_SOURCE_ENTITY_ID):
             new_data = dict(self._entry.data)
             new_data[CONF_SOURCE_ENTITY_ID] = self._source_entity_id
-            self.hass.config_entries.async_update_entry(
-                self._entry,
-                data=new_data,
-                unique_id=f"magic_climate::{self._source_entity_id}",
-            )
-        return self.async_create_entry(
-            title="",
-            data={
-                CONF_ENABLED_PRESETS: [pid for pid in STANDARD_PRESETS if pid in self._enabled],
-                CONF_PRESETS: stored_presets,
-            },
-        )
+            update_kwargs["data"] = new_data
+            update_kwargs["unique_id"] = f"magic_climate::{self._source_entity_id}"
+        self.hass.config_entries.async_update_entry(self._entry, **update_kwargs)
+
+    async def async_step_save(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        # Options have already been persisted incrementally by each sub-step;
+        # this just closes the flow with the current state.
+        return self.async_create_entry(title="", data=self._current_options())
 
     # ----------------------------------------------------------- basic step
 
@@ -87,6 +91,7 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             self._source_entity_id = user_input[CONF_SOURCE_ENTITY_ID]
             self._enabled = [pid for pid in STANDARD_PRESETS if user_input.get(pid)]
+            self._persist()
             return await self.async_step_init()
 
         schema = vol.Schema({
@@ -131,6 +136,7 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
                 if fan:
                     updated[PRESET_FAN] = fan
                 self._presets[preset_id] = updated
+                self._persist()
                 return await self.async_step_init()
 
         schema = vol.Schema({
