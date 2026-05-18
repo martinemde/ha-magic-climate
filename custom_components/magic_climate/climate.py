@@ -335,7 +335,11 @@ class MagicClimate(ClimateEntity):
         wants_range = "target_temp_low" in temp_kwargs or "target_temp_high" in temp_kwargs
 
         if wants_single and not supports_single and supports_range:
-            return {"target_temp_low": preset.low, "target_temp_high": preset.high}
+            # Collapse to a degenerate range pointed at the single setpoint we
+            # actually want, so sources that average low/high still land on
+            # our target instead of preset midpoint.
+            target = temp_kwargs["temperature"]
+            return {"target_temp_low": target, "target_temp_high": target}
         if wants_range and not supports_range and supports_single:
             return {"temperature": (preset.low + preset.high) / 2.0}
         return temp_kwargs
