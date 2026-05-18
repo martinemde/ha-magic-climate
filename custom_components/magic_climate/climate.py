@@ -183,11 +183,20 @@ class MagicClimate(ClimateEntity):
     def target_temperature(self) -> float | None:
         if not self._source_state:
             return None
-        val = self._source_state.attributes.get("temperature")
+        attrs = self._source_state.attributes
+        val = attrs.get("temperature")
         if val is not None:
             return self._normalize_temp(val)
-        low = self._source_state.attributes.get("target_temp_low")
-        high = self._source_state.attributes.get("target_temp_high")
+        # Source uses range setpoints internally (e.g. Mitsubishi CN105 in
+        # two-point mode). Pick the side that actually drives the heat pump
+        # in the current mode, so the wrapper UI matches what's applied.
+        low = attrs.get("target_temp_low")
+        high = attrs.get("target_temp_high")
+        mode = self.hvac_mode
+        if mode == HVACMode.HEAT and low is not None:
+            return self._normalize_temp(low)
+        if mode in (HVACMode.COOL, HVACMode.DRY) and high is not None:
+            return self._normalize_temp(high)
         if low is not None and high is not None:
             return self._normalize_temp((low + high) / 2.0)
         return self._normalize_temp(low if low is not None else high)
@@ -335,11 +344,11 @@ class MagicClimate(ClimateEntity):
         wants_range = "target_temp_low" in temp_kwargs or "target_temp_high" in temp_kwargs
 
         if wants_single and not supports_single and supports_range:
-            # Collapse to a degenerate range pointed at the single setpoint we
-            # actually want, so sources that average low/high still land on
-            # our target instead of preset midpoint.
-            target = temp_kwargs["temperature"]
-            return {"target_temp_low": target, "target_temp_high": target}
+            # Range-only sources (e.g. Mitsubishi CN105 in two-point mode)
+            # already pick the appropriate side per HVAC mode: low for HEAT,
+            # high for COOL/DRY, median for AUTO. Send the full preset band
+            # and let the source select.
+            return {"target_temp_low": preset.low, "target_temp_high": preset.high}
         if wants_range and not supports_range and supports_single:
             return {"temperature": (preset.low + preset.high) / 2.0}
         return temp_kwargs
@@ -430,6 +439,45 @@ class MagicClimate(ClimateEntity):
                 data[key] = self._denormalize_temp(kwargs[key])
         if "hvac_mode" in kwargs:
             data["hvac_mode"] = kwargs["hvac_mode"]
+        self._reshape_set_temperature_for_source(data)
         await self.hass.services.async_call(
             "climate", "set_temperature", data, blocking=True,
         )
+
+    def _reshape_set_temperature_for_source(self, data: dict[str, Any]) -> None:
+        """Rewrite a manual set_temperature payload to match source flags.
+
+        Mirrors `_adapt_temp_kwargs_to_source` but for ad-hoc UI tweaks: when
+        the user nudges the wrapper's setpoint in a single-setpoint mode and
+        the source only accepts range, set just the side that drives the
+        current mode and preserve the other side from source state.
+        """
+        if not self._source_state:
+            return
+        source_features = self._source_state.attributes.get("supported_features", 0)
+        supports_single = bool(source_features & ClimateEntityFeature.TARGET_TEMPERATURE)
+        supports_range = bool(source_features & ClimateEntityFeature.TARGET_TEMPERATURE_RANGE)
+
+        if "temperature" in data and not supports_single and supports_range:
+            target = data.pop("temperature")
+            attrs = self._source_state.attributes
+            cur_low = attrs.get("target_temp_low")
+            cur_high = attrs.get("target_temp_high")
+            mode = self.hvac_mode
+            if mode in (HVACMode.COOL, HVACMode.DRY):
+                data["target_temp_low"] = cur_low if cur_low is not None else target
+                data["target_temp_high"] = target
+            else:
+                data["target_temp_low"] = target
+                data["target_temp_high"] = cur_high if cur_high is not None else target
+        elif (
+            ("target_temp_low" in data or "target_temp_high" in data)
+            and not supports_range
+            and supports_single
+        ):
+            low = data.pop("target_temp_low", None)
+            high = data.pop("target_temp_high", None)
+            if low is not None and high is not None:
+                data["temperature"] = (low + high) / 2.0
+            else:
+                data["temperature"] = low if low is not None else high
