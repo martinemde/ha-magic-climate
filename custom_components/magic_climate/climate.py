@@ -96,6 +96,31 @@ class MagicClimate(ClimateEntity):
                 self.hass, [self._source_entity_id], self._handle_source_change
             )
         )
+        self.async_on_remove(
+            self._entry.add_update_listener(self._handle_entry_update)
+        )
+
+    async def _handle_entry_update(
+        self, hass: HomeAssistant, entry: ConfigEntry
+    ) -> None:
+        """Refresh presets in place when options change.
+
+        Avoids a full integration reload — recreating the entity races
+        against the OptionsFlow being open, and HA's frontend sometimes
+        misses the resulting state push so newly enabled presets never
+        appear in the picker. Source-entity changes still require a reload
+        because the state subscription needs to be rebuilt.
+        """
+        if entry.data.get(CONF_SOURCE_ENTITY_ID) != self._source_entity_id:
+            hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+            return
+        self._presets = _load_presets(entry)
+        if self._attr_preset_mode and self._attr_preset_mode not in {
+            p.name for p in self._presets
+        }:
+            self._attr_preset_mode = None
+            self._pending_apply = None
+        self.async_write_ha_state()
 
     @callback
     def _handle_source_change(self, event: Event) -> None:
@@ -423,8 +448,11 @@ class MagicClimate(ClimateEntity):
                 blocking=True,
             )
 
+        # Store the preset's *declared* mode/fan (possibly None). Drift is
+        # measured only against properties the preset actually specifies —
+        # changing an unspecified property does not exit the preset.
         self._pending_apply = {
-            "mode": preset.mode if preset.mode is not None else effective_mode,
+            "mode": preset.mode,
             "temp_kwargs": dict(pushed_temp_kwargs),
             "fan": preset.fan,
         }
@@ -467,6 +495,19 @@ class MagicClimate(ClimateEntity):
             if mode in (HVACMode.COOL, HVACMode.DRY):
                 data["target_temp_low"] = cur_low if cur_low is not None else target
                 data["target_temp_high"] = target
+            elif mode == HVACMode.AUTO:
+                # Source averages low/high in AUTO; center a band on the new
+                # target so the displayed midpoint equals what the user set.
+                span = 4.0
+                if (
+                    cur_low is not None
+                    and cur_high is not None
+                    and cur_high > cur_low
+                ):
+                    span = cur_high - cur_low
+                half = span / 2.0
+                data["target_temp_low"] = target - half
+                data["target_temp_high"] = target + half
             else:
                 data["target_temp_low"] = target
                 data["target_temp_high"] = cur_high if cur_high is not None else target
