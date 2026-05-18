@@ -315,6 +315,31 @@ class MagicClimate(ClimateEntity):
 
         return ClimateEntityFeature(features)
 
+    def _adapt_temp_kwargs_to_source(
+        self, temp_kwargs: dict[str, Any], preset: Preset
+    ) -> dict[str, Any]:
+        """Rewrite set_temperature kwargs so they match the source's flags.
+
+        Some climate entities (notably range-only HVACs) advertise only
+        TARGET_TEMPERATURE_RANGE even in single-setpoint modes like heat or
+        cool, and reject `temperature`. Others do the opposite. Adapt rather
+        than fail the service call.
+        """
+        if not temp_kwargs or not self._source_state:
+            return temp_kwargs
+
+        source_features = self._source_state.attributes.get("supported_features", 0)
+        supports_single = bool(source_features & ClimateEntityFeature.TARGET_TEMPERATURE)
+        supports_range = bool(source_features & ClimateEntityFeature.TARGET_TEMPERATURE_RANGE)
+        wants_single = "temperature" in temp_kwargs
+        wants_range = "target_temp_low" in temp_kwargs or "target_temp_high" in temp_kwargs
+
+        if wants_single and not supports_single and supports_range:
+            return {"target_temp_low": preset.low, "target_temp_high": preset.high}
+        if wants_range and not supports_range and supports_single:
+            return {"temperature": (preset.low + preset.high) / 2.0}
+        return temp_kwargs
+
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         await self.hass.services.async_call(
             "climate", "set_hvac_mode",
@@ -359,7 +384,9 @@ class MagicClimate(ClimateEntity):
         # 2. Push temperatures, denormalized for the source unit. The source-
         # unit values are what the source will echo back on its next state
         # event, so store those for drift comparison too.
-        temp_kwargs = compute_service_data(preset, effective_mode)
+        temp_kwargs = self._adapt_temp_kwargs_to_source(
+            compute_service_data(preset, effective_mode), preset
+        )
         pushed_temp_kwargs: dict[str, Any] = {}
         if temp_kwargs:
             data: dict[str, Any] = {"entity_id": self._source_entity_id}
