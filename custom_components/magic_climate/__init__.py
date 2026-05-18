@@ -19,7 +19,9 @@ def _platforms() -> list:
 async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool:
     """Set up Magic Climate from a config entry."""
     await hass.config_entries.async_forward_entry_setups(entry, _platforms())
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    # Options changes are handled in place by the climate entity itself —
+    # see MagicClimate._handle_entry_update. A full reload only happens
+    # when the source entity changes (rebuilds the state subscription).
     return True
 
 
@@ -74,6 +76,3 @@ async def async_migrate_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bo
     return True
 
 
-async def _async_update_listener(hass: "HomeAssistant", entry: "ConfigEntry") -> None:
-    """Reload the entry so the climate entity picks up new options."""
-    await hass.config_entries.async_reload(entry)
