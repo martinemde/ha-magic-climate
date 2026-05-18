@@ -1,6 +1,10 @@
 import pytest
 
-from custom_components.magic_climate.presets import Preset, PresetValidationError
+from custom_components.magic_climate.presets import (
+    Preset,
+    PresetValidationError,
+    compute_service_data,
+)
 
 
 def test_preset_basic_construction():
@@ -40,9 +44,6 @@ def test_preset_validates_name_whitespace_only_rejected():
 
 def test_preset_valid_passes_validate():
     Preset(name="Sleep", low=16.0, high=21.0).validate()  # no exception
-
-
-from custom_components.magic_climate.presets import compute_service_data
 
 
 def test_compute_service_data_heat_cool():
