@@ -1,0 +1,9 @@
+# Test dependencies.
+#
+# pytest-homeassistant-custom-component pins a specific Home Assistant version
+# and pulls in pytest, so it sets the Python floor (HA 2026 requires Python
+# 3.13). The integration tests in tests/test_climate_temperature.py load the
+# component inside a real HA instance and need it; the pure-logic preset tests
+# do not. ruff is pinned for reproducible lint.
+pytest-homeassistant-custom-component==0.13.316
+ruff==0.15.13
