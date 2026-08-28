@@ -1,11 +1,14 @@
 """The Magic Climate integration."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
-    from homeassistant.core import HomeAssistant
+    from homeassistant.core import Event, HomeAssistant
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _platforms() -> list:
@@ -16,12 +19,73 @@ def _platforms() -> list:
     return [Platform.CLIMATE]
 
 
+def _async_track_source_rename(hass: "HomeAssistant", entry: "ConfigEntry") -> None:
+    """Follow the wrapped entity if its entity id changes.
+
+    The source is pinned by entity id at creation, so a rename would
+    otherwise leave the wrapper subscribed to an id nothing publishes: it
+    goes unavailable with nothing logged and no hint of the cause.
+
+    This is deliberately a plain registry subscription rather than
+    `async_handle_source_entity_changes`. Everything that helper adds over
+    this is device relinking, and these wrappers are device-less on purpose
+    — the source's device sits in a different area than the wrapper belongs
+    in, so inheriting it would be wrong. HA core uses this same plain form
+    for sources it does not device-link (see generic_thermostat's sensor).
+    """
+    from homeassistant.helpers.event import async_track_entity_registry_updated_event
+
+    from .const import CONF_SOURCE_ENTITY_ID, DOMAIN
+
+    source_entity_id: str = entry.data[CONF_SOURCE_ENTITY_ID]
+
+    async def _source_registry_updated(event: "Event") -> None:
+        data: dict[str, Any] = event.data
+        if data["action"] == "remove":
+            # Nothing to repoint at. The wrapper reports unavailable on its
+            # own; say why, because otherwise this is silent.
+            _LOGGER.warning(
+                "Magic Climate source %s was removed; %s will stay unavailable "
+                "until the entry is deleted and recreated against a new source",
+                source_entity_id,
+                entry.title,
+            )
+            return
+        if data["action"] != "update" or "entity_id" not in data["changes"]:
+            return
+
+        new_entity_id: str = data["entity_id"]
+        _LOGGER.debug(
+            "Magic Climate source renamed %s -> %s", source_entity_id, new_entity_id
+        )
+        # The unique id embeds the source, so it has to move too — a stale
+        # one would stop guarding against the renamed entity being wrapped
+        # a second time.
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, CONF_SOURCE_ENTITY_ID: new_entity_id},
+            unique_id=f"{DOMAIN}::{new_entity_id}",
+        )
+        # The entity captured the old id in its state subscription and every
+        # service call, so rebuild it. RestoreEntity carries the held preset
+        # across the reload.
+        hass.config_entries.async_schedule_reload(entry.entry_id)
+
+    entry.async_on_unload(
+        async_track_entity_registry_updated_event(
+            hass, source_entity_id, _source_registry_updated
+        )
+    )
+
+
 async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool:
     """Set up Magic Climate from a config entry."""
+    _async_track_source_rename(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, _platforms())
     # Options changes are handled in place by the climate entity itself —
     # see MagicClimate._handle_entry_update. Nothing an options flow can
-    # change requires a reload; the source entity is fixed at creation.
+    # change requires a reload; only a source rename does, and that is
+    # handled above.
     return True
 
 

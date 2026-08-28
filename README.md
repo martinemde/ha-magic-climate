@@ -49,6 +49,16 @@ You can't. The source is fixed when the entry is created: the entry's unique id,
 entity's state subscription, and every stored mode and fan value are all tied to that
 one source. To wrap something else, delete the entry and add a new one.
 
+**Renaming it is fine, though.** The wrapper tracks its source in the entity registry
+and follows an entity-id change, rewriting the stored source and the entry's unique id
+before reloading. Renaming used to break the wrapper silently — it stayed subscribed to
+an id nothing published and went unavailable with nothing logged.
+
+The wrapper does not attach itself to the source's device. That is deliberate rather than
+an oversight: a helper inherits its device's area, and the right area for a wrapper is not
+always the area the source's device sits in. If the source is deleted outright, the
+wrapper logs a warning and goes unavailable; there is nothing to repoint at.
+
 ## How presets apply
 
 A preset always declares a comfort *band* (low + high). When you select a preset, the wrapper pushes setpoints to the source based on the source's **current** HVAC mode:
