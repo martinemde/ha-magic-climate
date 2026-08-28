@@ -5,12 +5,18 @@ DOMAIN = "magic_climate"
 CONF_SOURCE_ENTITY_ID = "source_entity_id"
 CONF_PRESETS = "presets"
 CONF_ENABLED_PRESETS = "enabled_presets"
+CONF_PEAK = "peak"
 
 # Preset dict keys (stored in entry.options[CONF_PRESETS][<preset_id>])
 PRESET_LOW = "low"
 PRESET_HIGH = "high"
 PRESET_MODE = "mode"
 PRESET_FAN = "fan"
+
+# Peak dict keys (stored in entry.options[CONF_PEAK])
+PEAK_ENABLED = "enabled"
+PEAK_START = "start"
+PEAK_END = "end"
 
 # HA's standard climate preset names. These are the only preset IDs we expose;
 # names are matched against homeassistant.components.climate.const.PRESET_*.
@@ -33,6 +39,26 @@ STANDARD_PRESETS: tuple[str, ...] = (
 )
 
 DEFAULT_ENABLED_PRESETS: tuple[str, ...] = (PRESET_HOME, PRESET_AWAY, PRESET_SLEEP)
+
+# During the peak window, asking for PEAK_SUBSTITUTE_FOR pushes
+# PEAK_SUBSTITUTE_WITH's band instead. The reported preset_mode stays the
+# requested one, so nothing downstream sees a preset change to react to.
+PEAK_SUBSTITUTE_FOR = PRESET_HOME
+PEAK_SUBSTITUTE_WITH = PRESET_ECO
+
+# A typical afternoon time-of-use peak. Applies every day; utilities that
+# exempt weekends are not modeled.
+DEFAULT_PEAK_START = "16:00:00"
+DEFAULT_PEAK_END = "21:00:00"
+
+
+def default_peak() -> dict:
+    """Peak config for an entry that has never had one: off, but populated."""
+    return {
+        PEAK_ENABLED: False,
+        PEAK_START: DEFAULT_PEAK_START,
+        PEAK_END: DEFAULT_PEAK_END,
+    }
 
 # Sensible per-preset defaults in °C. User adjusts via options flow.
 PRESET_DEFAULTS: dict[str, dict[str, float]] = {

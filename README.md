@@ -5,6 +5,7 @@ A generic Home Assistant custom integration that wraps any `climate.*` entity to
 - **UI-configured presets** — define `away`, `home`, `eco`, `sleep`, … in HA's options flow. No YAML. No device reflashing.
 - **Dual-setpoint UI fix** — auto-detected. Climate entities that support `HEAT_COOL` with `target_temperature_range` get one slider in HEAT/COOL/AUTO and two in HEAT_COOL. The native HA thermostat card otherwise misbehaves for these entities.
 - **Fahrenheit normalization** — auto-detected. Source entities that report °F on a °F HA instance no longer trigger HA's double-conversion bug.
+- **Peak-hour Eco substitution** — during a daily peak window, selecting Home quietly applies the Eco band instead, while still reporting `home`.
 
 ## Installation
 
@@ -28,14 +29,17 @@ Copy `custom_components/magic_climate/` to your HA config directory and restart.
 ## Defining presets
 
 1. On your Magic Climate entry, click **Configure**.
-2. **Basic Options** → pick which of HA's standard presets (Home, Away, Sleep, Eco,
+2. **Basic Options** → pick which of HA's standard presets (Home, Away, Sleep,
    Comfort, Boost, Activity) to expose. Each enabled preset gets its own menu entry.
-   The wrapped entity is not editable here — see below.
-3. Open a preset → set its low/high temperatures, and optionally an HVAC mode and fan
-   mode. Both are dropdowns of what the wrapped entity reports in `hvac_modes` and
-   `fan_modes`, so a preset can only ask for a setting the hardware actually has.
+   Eco is not here — it lives on the **Home & Eco** screen, beside the peak settings
+   that depend on it. The wrapped entity is not editable here either; see below.
+3. **Home & Eco** → both bands on one screen, plus the peak window. See
+   [Peak hours](#peak-hours).
+4. Open any other preset → set its low/high temperatures, and optionally an HVAC mode
+   and fan mode. Both are dropdowns of what the wrapped entity reports in `hvac_modes`
+   and `fan_modes`, so a preset can only ask for a setting the hardware actually has.
    Leave either unchanged and the preset won't touch it.
-4. **Save and exit** when done.
+5. **Save and exit** when done.
 
 Presets persist in HA's config storage. No restart needed; the wrapper picks up changes immediately.
 
@@ -61,6 +65,41 @@ A preset always declares a comfort *band* (low + high). When you select a preset
 If the preset declares a forced `mode`, that mode is pushed first and then used for the mapping. A forced `fan` is pushed after the temps.
 
 Selection is one-shot. Any manual change clears the preset label.
+
+## Peak hours
+
+Utilities charge more during a few hours a day. The **Home & Eco** screen turns that
+into a rule: while the peak window is open, selecting **Home** pushes the **Eco** band
+instead.
+
+The wrapper keeps reporting `home` the whole time. That is the point — the preset never
+changes, so no automation, dashboard, or wall thermostat sees an event to react to, and
+nothing can feed back into the wrapper's own drift detection.
+
+| | |
+|---|---|
+| Requires | the Eco preset enabled, on the same screen |
+| Applies to | `home` only — every other preset is pushed as configured |
+| Choosing Eco yourself | holds Eco until you change it, peak or not |
+| Schedule | every day; a window ending before it starts runs overnight |
+| Boundaries | half-open — peak is over the instant it ends |
+
+At the start and end of the window the wrapper re-pushes, but only if **Home is still
+the held preset**. If anything else has touched the setpoint since, drift detection has
+already cleared the preset, and peak leaves it alone until you pick a preset again. This
+is the only time the wrapper writes without being asked.
+
+Peak state is published as attributes, with boundaries as timestamps so an automation
+can act *ahead* of the window (pre-cooling, say):
+
+| attribute | example |
+|---|---|
+| `peak_active` | `true` |
+| `peak_start` / `peak_end` | `"16:00:00"` / `"21:00:00"` |
+| `next_peak_start` / `next_peak_end` | `"2026-08-29T16:00:00-07:00"` |
+| `effective_preset` | `"eco"` while `preset_mode` reads `"home"` |
+
+Turning peak off, or disabling Eco, restores plain preset behavior.
 
 ## How the dual-setpoint UI fix works
 

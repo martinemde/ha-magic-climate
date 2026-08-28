@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACAction, HVACMode
@@ -16,17 +17,26 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_change,
+)
+from homeassistant.util import dt as dt_util
 
 from .const import (
     APPLY_GUARD_SECONDS,
     CONF_ENABLED_PRESETS,
+    CONF_PEAK,
     CONF_PRESETS,
     CONF_SOURCE_ENTITY_ID,
     DOMAIN,
     DRIFT_TOLERANCE,
+    PEAK_ENABLED,
+    PEAK_SUBSTITUTE_FOR,
+    PEAK_SUBSTITUTE_WITH,
     STANDARD_PRESETS,
 )
+from .peak import PeakValidationError, PeakWindow, resolve
 from .presets import Preset, PresetValidationError, compute_service_data
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +63,25 @@ def _load_presets(entry: ConfigEntry) -> list[Preset]:
             continue
         presets.append(preset)
     return presets
+
+
+def _load_peak(entry: ConfigEntry) -> PeakWindow | None:
+    """The entry's peak window, or None when peak substitution is off.
+
+    An unparseable or degenerate window is dropped rather than raised: the
+    wrapper must keep working as an ordinary thermostat if the stored peak
+    config is bad.
+    """
+    raw = (entry.options or {}).get(CONF_PEAK) or {}
+    if not raw.get(PEAK_ENABLED):
+        return None
+    try:
+        window = PeakWindow.from_dict(raw)
+        window.validate()
+    except (PeakValidationError, KeyError, TypeError, ValueError) as err:
+        _LOGGER.warning("Ignoring invalid peak window %r: %s", raw, err)
+        return None
+    return window
 
 
 async def async_setup_entry(
@@ -89,6 +118,10 @@ class MagicClimate(ClimateEntity):
         self._attr_unique_id = f"{DOMAIN}::{entry.entry_id}"
         self._source_state = None
         self._presets: list[Preset] = _load_presets(entry)
+        self._peak: PeakWindow | None = _load_peak(entry)
+        # Latched so the minute tick can act on the *transition* rather than
+        # re-pushing every minute the window is open.
+        self._peak_active: bool = self._in_peak()
         self._attr_preset_mode: str | None = None
         # Tracks the state the wrapper just pushed; used to suppress drift
         # detection while the source confirms each setting.
@@ -105,6 +138,14 @@ class MagicClimate(ClimateEntity):
         self.async_on_remove(
             self._entry.add_update_listener(self._handle_entry_update)
         )
+        # A minute tick rather than two re-armed point-in-time callbacks:
+        # it re-derives the window from the clock every time, so it heals
+        # itself across restarts, DST changes, and options edits instead of
+        # depending on a timer that was armed under the old configuration.
+        self._peak_active = self._in_peak()
+        self.async_on_remove(
+            async_track_time_change(self.hass, self._handle_minute_tick, second=0)
+        )
 
     async def _handle_entry_update(
         self, hass: HomeAssistant, entry: ConfigEntry
@@ -114,11 +155,17 @@ class MagicClimate(ClimateEntity):
         Avoids a full integration reload — recreating the entity races
         against the OptionsFlow being open, and HA's frontend sometimes
         misses the resulting state push so newly enabled presets never
-        appear in the picker. Presets are the only thing options can
-        change; the source entity is fixed at entry creation, so the state
-        subscription never needs rebuilding.
+        appear in the picker. Presets and the peak window are the only
+        things options can change; the source entity is fixed at entry
+        creation, so the state subscription never needs rebuilding.
+
+        Reloading does not re-push. Editing a band while holding its preset
+        takes effect the next time the preset is applied, which keeps the
+        one-shot contract: options edits never command the hardware.
         """
         self._presets = _load_presets(entry)
+        self._peak = _load_peak(entry)
+        self._peak_active = self._in_peak()
         if self._attr_preset_mode and self._attr_preset_mode not in {
             p.name for p in self._presets
         }:
@@ -171,6 +218,97 @@ class MagicClimate(ClimateEntity):
             return True
 
         return False
+
+    # ------------------------------------------------------------ peak window
+
+    def _in_peak(self) -> bool:
+        """Whether the peak window is open right now, by the wall clock."""
+        return self._peak is not None and self._peak.contains(dt_util.now())
+
+    def _substitute_name(self) -> str | None:
+        """The preset that stands in during peak, if it is available.
+
+        `self._presets` holds only enabled, valid presets, so this returns
+        None whenever Eco is switched off — which is the nesting the options
+        screen implies: no Eco, nothing to substitute.
+        """
+        if self._peak is None:
+            return None
+        if any(p.name == PEAK_SUBSTITUTE_WITH for p in self._presets):
+            return PEAK_SUBSTITUTE_WITH
+        return None
+
+    def _preset_by_name(self, name: str) -> Preset | None:
+        return next((p for p in self._presets if p.name == name), None)
+
+    def _effective_preset(self, requested: str) -> Preset | None:
+        """The preset whose band actually gets pushed for `requested`.
+
+        During peak this is Eco in place of Home. The *reported* preset stays
+        whatever was requested — see async_set_preset_mode.
+        """
+        target = resolve(
+            requested,
+            PEAK_SUBSTITUTE_FOR,
+            self._substitute_name(),
+            self._in_peak(),
+        )
+        return self._preset_by_name(target) or self._preset_by_name(requested)
+
+    async def _handle_minute_tick(self, now: datetime) -> None:
+        """Re-apply the Home preset when the peak window opens or closes.
+
+        This is the one place the wrapper writes without being asked, so it
+        is deliberately narrow: it fires only on a boundary crossing, only
+        while Home is still the held preset, and only when a substitute
+        exists. A manual touch or a wall thermostat will already have
+        cleared preset_mode via drift detection, so this can never overwrite
+        anything but the wrapper's own earlier push.
+        """
+        in_peak = self._in_peak()
+        if in_peak == self._peak_active:
+            return
+        self._peak_active = in_peak
+
+        if (
+            self._attr_preset_mode == PEAK_SUBSTITUTE_FOR
+            and self._substitute_name() is not None
+            and self.available
+        ):
+            _LOGGER.debug(
+                "Peak %s; re-applying %r on %s",
+                "started" if in_peak else "ended",
+                PEAK_SUBSTITUTE_FOR,
+                self._source_entity_id,
+            )
+            await self._async_apply_preset(PEAK_SUBSTITUTE_FOR)
+        else:
+            self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Peak state, exposed as clock times rather than only a flag.
+
+        A consumer that wants to pre-cool needs to know *when* peak starts,
+        not just whether it is running, so the boundaries are published as
+        absolute next-occurrence timestamps.
+        """
+        if self._peak is None:
+            return {"peak_active": False}
+        now = dt_util.now()
+        effective = None
+        if self._attr_preset_mode is not None:
+            preset = self._effective_preset(self._attr_preset_mode)
+            effective = preset.name if preset else None
+        window = self._peak.to_dict()
+        return {
+            "peak_active": self._in_peak(),
+            "peak_start": window["start"],
+            "peak_end": window["end"],
+            "next_peak_start": self._peak.next_start(now).isoformat(),
+            "next_peak_end": self._peak.next_end(now).isoformat(),
+            "effective_preset": effective,
+        }
 
     @property
     def available(self) -> bool:
@@ -434,7 +572,21 @@ class MagicClimate(ClimateEntity):
         )
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
-        preset = next((p for p in self._presets if p.name == preset_mode), None)
+        if self._preset_by_name(preset_mode) is None:
+            _LOGGER.warning("Unknown preset: %r", preset_mode)
+            return
+        await self._async_apply_preset(preset_mode)
+
+    async def _async_apply_preset(self, preset_mode: str) -> None:
+        """Push `preset_mode`, substituting Eco's band while peak is open.
+
+        `preset_mode` is what gets *reported* afterwards; `preset` is what
+        actually gets pushed. Keeping them separate is what stops the
+        substitution from feeding back: preset_mode never changes, so no
+        automation sees an event, and drift is measured against the values
+        really sent rather than against the requested preset's band.
+        """
+        preset = self._effective_preset(preset_mode)
         if preset is None:
             _LOGGER.warning("Unknown preset: %r", preset_mode)
             return

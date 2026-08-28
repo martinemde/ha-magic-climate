@@ -20,10 +20,9 @@
         "title": "Magic Climate",
         "menu_options": {
           "basic": "Basic Options",
-          "preset_home": "Home Preset",
+          "comfort": "Home & Eco",
           "preset_away": "Away Preset",
           "preset_sleep": "Sleep Preset",
-          "preset_eco": "Eco Preset",
           "preset_comfort": "Comfort Preset",
           "preset_boost": "Boost Preset",
           "preset_activity": "Activity Preset",
@@ -32,25 +31,38 @@
       },
       "basic": {
         "title": "Basic Options",
-        "description": "Choose which of Home Assistant's standard presets to expose. This entry wraps {source}; that cannot be changed here — delete the entry and add a new one to wrap a different entity.",
+        "description": "Choose which of Home Assistant's standard presets to expose. Eco is turned on from the Home & Eco screen, where the peak settings that depend on it live. This entry wraps {source}; that cannot be changed here — delete the entry and add a new one to wrap a different entity.",
         "data": {
           "home": "Home",
           "away": "Away",
           "sleep": "Sleep",
-          "eco": "Eco",
           "comfort": "Comfort",
           "boost": "Boost",
           "activity": "Activity"
         }
       },
-      "preset_home": {
-        "title": "Home Preset",
-        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
+      "comfort": {
+        "title": "Home & Eco",
+        "description": "Home is the everyday comfort band. Eco is the band used when you want the unit to work less.\n\nTurn on \"Use Eco during peak hours\" and Home will quietly apply the Eco band inside the peak window, then go back to the Home band when peak ends — the preset still reads Home the whole time. Choosing Eco yourself holds Eco until you change it, peak or not.\n\nThe peak window applies every day and may run past midnight. Adjusting the thermostat by hand clears the preset and stops the substitution until you pick a preset again.",
         "data": {
-          "low": "Low temperature",
-          "high": "High temperature",
-          "mode": "HVAC mode",
-          "fan": "Fan mode"
+          "home_low": "Home — low temperature",
+          "home_high": "Home — high temperature",
+          "home_mode": "Home — HVAC mode",
+          "home_fan": "Home — fan mode",
+          "eco_enabled": "Enable the Eco preset",
+          "eco_low": "Eco — low temperature",
+          "eco_high": "Eco — high temperature",
+          "eco_mode": "Eco — HVAC mode",
+          "eco_fan": "Eco — fan mode",
+          "peak_enabled": "Use Eco during peak hours",
+          "peak_start": "Peak start time",
+          "peak_end": "Peak end time"
+        },
+        "data_description": {
+          "eco_enabled": "Adds Eco to the preset picker. Required for peak substitution.",
+          "home_mode": "Leave unchanged to have the preset not touch the HVAC mode.",
+          "eco_mode": "Leave unchanged to have the preset not touch the HVAC mode.",
+          "peak_end": "An end earlier than the start means the window runs overnight."
         }
       },
       "preset_away": {
@@ -65,16 +77,6 @@
       },
       "preset_sleep": {
         "title": "Sleep Preset",
-        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
-        "data": {
-          "low": "Low temperature",
-          "high": "High temperature",
-          "mode": "HVAC mode",
-          "fan": "Fan mode"
-        }
-      },
-      "preset_eco": {
-        "title": "Eco Preset",
         "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
         "data": {
           "low": "Low temperature",
@@ -115,7 +117,10 @@
       }
     },
     "error": {
-      "low_not_below_high": "Low temperature must be less than high temperature."
+      "low_not_below_high": "Low temperature must be less than high temperature.",
+      "eco_low_not_below_high": "Eco low temperature must be less than Eco high temperature.",
+      "peak_needs_eco": "Enable the Eco preset before using it during peak hours.",
+      "peak_window_empty": "Peak start and end must differ."
     }
   }
 }

@@ -24,9 +24,13 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.magic_climate.const import (
     CONF_ENABLED_PRESETS,
+    CONF_PEAK,
     CONF_PRESETS,
     CONF_SOURCE_ENTITY_ID,
     DOMAIN,
+    PEAK_ENABLED,
+    PEAK_END,
+    PEAK_START,
     PRESET_FAN,
     PRESET_HIGH,
     PRESET_LOW,
@@ -69,6 +73,8 @@ async def _setup(
     *,
     source: ClimateEntity | None = None,
     presets: dict[str, dict[str, Any]] | None = None,
+    enabled: list[str] | None = None,
+    peak: dict[str, Any] | None = None,
 ) -> MockConfigEntry:
     """Stand up a source thermostat and a Magic Climate entry wrapping it."""
     setup_test_component_platform(hass, "climate", [source or FanThermostat()], built_in=True)
@@ -77,15 +83,18 @@ async def _setup(
 
     entry = MockConfigEntry(
         domain=DOMAIN,
-        version=2,
+        version=3,
         data={CONF_SOURCE_ENTITY_ID: SOURCE_ENTITY_ID, CONF_NAME: "Bedroom Magic"},
         options={
-            CONF_ENABLED_PRESETS: ["home", "sleep"],
+            CONF_ENABLED_PRESETS: enabled or ["home", "sleep"],
             CONF_PRESETS: presets
             or {
                 "home": {PRESET_LOW: 20.0, PRESET_HIGH: 22.0},
                 "sleep": {PRESET_LOW: 18.0, PRESET_HIGH: 21.0},
+                "eco": {PRESET_LOW: 17.0, PRESET_HIGH: 25.0},
             },
+            CONF_PEAK: peak
+            or {PEAK_ENABLED: False, PEAK_START: "16:00:00", PEAK_END: "21:00:00"},
         },
     )
     entry.add_to_hass(hass)
@@ -204,7 +213,7 @@ async def test_preset_form_returns_to_the_menu_after_submit(
     hass: HomeAssistant,
 ) -> None:
     entry = await _setup(hass)
-    result = await _preset_form(hass, entry, "home")
+    result = await _preset_form(hass, entry, "sleep")
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {PRESET_LOW: 20.0, PRESET_HIGH: 22.0, PRESET_MODE: "heat", PRESET_FAN: "auto"},
@@ -222,7 +231,15 @@ async def test_basic_options_does_not_offer_the_source_entity(
     state subscription, so the source is only settable in the config flow."""
     entry = await _setup(hass)
     result = await _menu_step(hass, entry, "basic")
-    assert set(result["data_schema"].schema) == set(STANDARD_PRESETS)
+    assert CONF_SOURCE_ENTITY_ID not in set(result["data_schema"].schema)
+
+
+async def test_basic_options_does_not_toggle_eco(hass: HomeAssistant) -> None:
+    """Eco is toggled on the Home & Eco screen, next to the peak settings
+    that have nothing to act on without it."""
+    entry = await _setup(hass)
+    result = await _menu_step(hass, entry, "basic")
+    assert set(result["data_schema"].schema) == set(STANDARD_PRESETS) - {"eco"}
 
 
 async def test_basic_options_submit_leaves_the_source_alone(
@@ -231,9 +248,182 @@ async def test_basic_options_submit_leaves_the_source_alone(
     entry = await _setup(hass)
     result = await _menu_step(hass, entry, "basic")
     await hass.config_entries.options.async_configure(
-        result["flow_id"], {pid: pid in ("home", "sleep", "eco") for pid in STANDARD_PRESETS}
+        result["flow_id"],
+        {pid: pid in ("home", "sleep", "boost") for pid in STANDARD_PRESETS if pid != "eco"},
     )
     await hass.async_block_till_done()
 
     assert entry.data[CONF_SOURCE_ENTITY_ID] == SOURCE_ENTITY_ID
-    assert entry.options[CONF_ENABLED_PRESETS] == ["home", "sleep", "eco"]
+    assert entry.options[CONF_ENABLED_PRESETS] == ["home", "sleep", "boost"]
+
+
+async def test_basic_options_submit_preserves_eco(hass: HomeAssistant) -> None:
+    """Eco is absent from the form, so it must be carried through rather
+    than read off as unchecked."""
+    entry = await _setup(hass, enabled=["home", "sleep", "eco"])
+    result = await _menu_step(hass, entry, "basic")
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {pid: pid in ("home", "sleep") for pid in STANDARD_PRESETS if pid != "eco"},
+    )
+    await hass.async_block_till_done()
+
+    assert "eco" in entry.options[CONF_ENABLED_PRESETS]
+
+
+# --- The combined Home & Eco screen ----------------------------------------
+
+
+async def _comfort_form(hass: HomeAssistant, entry: MockConfigEntry):
+    return await _menu_step(hass, entry, "comfort")
+
+
+def _comfort_submit(**overrides) -> dict[str, Any]:
+    """A full, valid comfort-screen payload with selective overrides."""
+    payload: dict[str, Any] = {
+        "home_low": 20.0, "home_high": 22.0, "home_mode": "", "home_fan": "",
+        "eco_enabled": True,
+        "eco_low": 17.0, "eco_high": 25.0, "eco_mode": "", "eco_fan": "",
+        "peak_enabled": True,
+        "peak_start": "16:00:00", "peak_end": "21:00:00",
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def test_comfort_screen_carries_both_presets_and_the_peak_window(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass)
+    result = await _comfort_form(hass, entry)
+    assert set(result["data_schema"].schema) == {
+        "home_low", "home_high", "home_mode", "home_fan",
+        "eco_enabled",
+        "eco_low", "eco_high", "eco_mode", "eco_fan",
+        "peak_enabled", "peak_start", "peak_end",
+    }
+
+
+async def test_comfort_submit_persists_both_bands_and_the_window(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass)
+    result = await _comfort_form(hass, entry)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], _comfort_submit()
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.MENU
+    assert entry.options[CONF_PRESETS]["home"][PRESET_LOW] == 20.0
+    assert entry.options[CONF_PRESETS]["eco"][PRESET_HIGH] == 25.0
+    assert entry.options[CONF_PEAK] == {
+        PEAK_ENABLED: True, PEAK_START: "16:00:00", PEAK_END: "21:00:00",
+    }
+
+
+async def test_enabling_eco_on_the_comfort_screen_adds_it_to_the_picker(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass, enabled=["home", "sleep"])
+    result = await _comfort_form(hass, entry)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], _comfort_submit()
+    )
+    await hass.async_block_till_done()
+
+    assert "eco" in entry.options[CONF_ENABLED_PRESETS]
+
+
+async def test_disabling_eco_on_the_comfort_screen_removes_it(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass, enabled=["home", "sleep", "eco"])
+    result = await _comfort_form(hass, entry)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], _comfort_submit(eco_enabled=False, peak_enabled=False)
+    )
+    await hass.async_block_till_done()
+
+    assert "eco" not in entry.options[CONF_ENABLED_PRESETS]
+
+
+async def test_peak_without_eco_is_rejected(hass: HomeAssistant) -> None:
+    """The window has nothing to substitute if Eco is off."""
+    entry = await _setup(hass)
+    result = await _comfort_form(hass, entry)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], _comfort_submit(eco_enabled=False, peak_enabled=True)
+    )
+    assert result["errors"] == {"base": "peak_needs_eco"}
+
+
+async def test_empty_peak_window_is_rejected(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    result = await _comfort_form(hass, entry)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], _comfort_submit(peak_start="16:00:00", peak_end="16:00:00")
+    )
+    assert result["errors"] == {"base": "peak_window_empty"}
+
+
+async def test_inverted_home_band_is_rejected(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    result = await _comfort_form(hass, entry)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], _comfort_submit(home_low=24.0, home_high=20.0)
+    )
+    assert result["errors"] == {"base": "low_not_below_high"}
+
+
+async def test_inverted_eco_band_is_rejected(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    result = await _comfort_form(hass, entry)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], _comfort_submit(eco_low=26.0, eco_high=17.0)
+    )
+    assert result["errors"] == {"base": "eco_low_not_below_high"}
+
+
+async def test_inverted_eco_band_is_ignored_while_eco_is_off(
+    hass: HomeAssistant,
+) -> None:
+    """Eco's fields stay on screen when it is disabled; don't block on them."""
+    entry = await _setup(hass)
+    result = await _comfort_form(hass, entry)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        _comfort_submit(eco_enabled=False, peak_enabled=False, eco_low=26.0, eco_high=17.0),
+    )
+    assert result["type"] is FlowResultType.MENU
+
+
+async def test_an_overnight_peak_window_is_accepted(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    result = await _comfort_form(hass, entry)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], _comfort_submit(peak_start="20:00:00", peak_end="06:00:00")
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.MENU
+    assert entry.options[CONF_PEAK][PEAK_START] == "20:00:00"
+
+
+async def test_home_and_eco_have_no_standalone_menu_entries(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass, enabled=["home", "sleep", "eco"])
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert "comfort" in result["menu_options"]
+    assert "preset_home" not in result["menu_options"]
+    assert "preset_eco" not in result["menu_options"]
+    assert "preset_sleep" in result["menu_options"]
+
+
+async def test_comfort_entry_disappears_when_neither_home_nor_eco_is_on(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass, enabled=["sleep"])
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert "comfort" not in result["menu_options"]

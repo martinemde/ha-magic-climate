@@ -31,17 +31,30 @@ async def async_unload_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> boo
 
 
 async def async_migrate_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool:
-    """Migrate v1 (free-form list of presets) to v2 (standard-preset dict)."""
+    """Bring an entry forward to the current options schema.
+
+    v1 -> v2 reshapes a free-form list of presets into a standard-preset
+    dict. v2 -> v3 adds the peak-window block, switched off, so an existing
+    entry keeps behaving exactly as it did until peak is configured.
+    """
     from .const import (
         CONF_ENABLED_PRESETS,
+        CONF_PEAK,
         CONF_PRESETS,
         PRESET_DEFAULTS,
         PRESET_HIGH,
         PRESET_LOW,
         STANDARD_PRESETS,
+        default_peak,
     )
 
-    if entry.version >= 2:
+    if entry.version >= 3:
+        return True
+
+    if entry.version == 2:
+        options = dict(entry.options or {})
+        options.setdefault(CONF_PEAK, default_peak())
+        hass.config_entries.async_update_entry(entry, options=options, version=3)
         return True
 
     old_presets = (entry.options or {}).get(CONF_PRESETS, []) or []
@@ -71,8 +84,9 @@ async def async_migrate_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bo
     new_options = {
         CONF_ENABLED_PRESETS: enabled,
         CONF_PRESETS: new_presets,
+        CONF_PEAK: default_peak(),
     }
-    hass.config_entries.async_update_entry(entry, options=new_options, version=2)
+    hass.config_entries.async_update_entry(entry, options=new_options, version=3)
     return True
 
 
