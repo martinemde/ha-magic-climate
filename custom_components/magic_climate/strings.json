@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Magic Climate",
-        "description": "Wrap a climate entity to add UI-configured presets.",
+        "description": "Wrap a climate entity to add UI-configured presets. The wrapped entity is fixed once the entry is created — to wrap a different one, delete this entry and add another.",
         "data": {
           "source_entity_id": "Source climate entity",
           "name": "Display name (optional)"
@@ -32,9 +32,8 @@
       },
       "basic": {
         "title": "Basic Options",
-        "description": "Pick the climate entity to wrap, and choose which standard presets to expose.",
+        "description": "Choose which of Home Assistant's standard presets to expose. This entry wraps {source}; that cannot be changed here — delete the entry and add a new one to wrap a different entity.",
         "data": {
-          "source_entity_id": "Target climate entity",
           "home": "Home",
           "away": "Away",
           "sleep": "Sleep",

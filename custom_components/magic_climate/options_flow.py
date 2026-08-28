@@ -47,6 +47,9 @@ _NO_OVERRIDE_LABEL = "Leave unchanged"
 class MagicClimateOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self._entry = entry
+        # Fixed at entry creation. The entity's state subscription, unique id,
+        # and every stored mode/fan value are tied to this source, so changing
+        # it means deleting the entry and adding a new one.
         self._source_entity_id: str = entry.data[CONF_SOURCE_ENTITY_ID]
         self._enabled: list[str] = list(
             entry.options.get(CONF_ENABLED_PRESETS, []) or []
@@ -84,16 +87,12 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
 
         Each sub-step calls this on submit so changes survive the user
         closing the dialog without clicking "Save and exit". The update
-        listener reloads the climate entity so newly enabled presets show
+        listener refreshes the climate entity so newly enabled presets show
         up in the picker right away.
         """
-        update_kwargs: dict[str, Any] = {"options": self._current_options()}
-        if self._source_entity_id != self._entry.data.get(CONF_SOURCE_ENTITY_ID):
-            new_data = dict(self._entry.data)
-            new_data[CONF_SOURCE_ENTITY_ID] = self._source_entity_id
-            update_kwargs["data"] = new_data
-            update_kwargs["unique_id"] = f"magic_climate::{self._source_entity_id}"
-        self.hass.config_entries.async_update_entry(self._entry, **update_kwargs)
+        self.hass.config_entries.async_update_entry(
+            self._entry, options=self._current_options()
+        )
 
     async def async_step_save(
         self, user_input: dict[str, Any] | None = None
@@ -108,23 +107,19 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         if user_input is not None:
-            self._source_entity_id = user_input[CONF_SOURCE_ENTITY_ID]
             self._enabled = [pid for pid in STANDARD_PRESETS if user_input.get(pid)]
             self._persist()
             return await self.async_step_init()
 
         schema = vol.Schema({
-            vol.Required(
-                CONF_SOURCE_ENTITY_ID, default=self._source_entity_id
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="climate")
-            ),
-            **{
-                vol.Required(pid, default=pid in self._enabled): selector.BooleanSelector()
-                for pid in STANDARD_PRESETS
-            },
+            vol.Required(pid, default=pid in self._enabled): selector.BooleanSelector()
+            for pid in STANDARD_PRESETS
         })
-        return self.async_show_form(step_id="basic", data_schema=schema)
+        return self.async_show_form(
+            step_id="basic",
+            data_schema=schema,
+            description_placeholders={"source": self._source_entity_id},
+        )
 
     # ---------------------------------------------------------- preset step
 
@@ -204,8 +199,10 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
     ) -> selector.SelectSelector:
         """A dropdown of `options` plus a leading "leave unchanged" entry.
 
-        A stored value the source no longer offers is kept in the list so
-        re-pointing at a different unit does not silently drop it.
+        A stored value the source no longer offers is kept in the list. The
+        source cannot change, but what it reports can — a firmware or ESPHome
+        config change that drops a fan speed should not silently rewrite a
+        preset the user configured against it.
         """
         if current and current not in options:
             options = [*options, current]

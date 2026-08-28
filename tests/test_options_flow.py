@@ -31,6 +31,7 @@ from custom_components.magic_climate.const import (
     PRESET_HIGH,
     PRESET_LOW,
     PRESET_MODE,
+    STANDARD_PRESETS,
 )
 
 SOURCE_ENTITY_ID = "climate.test_source"
@@ -93,12 +94,17 @@ async def _setup(
     return entry
 
 
-async def _preset_form(hass: HomeAssistant, entry: MockConfigEntry, preset_id: str):
-    """Open the options flow and step into one preset's form."""
+async def _menu_step(hass: HomeAssistant, entry: MockConfigEntry, step_id: str):
+    """Open the options flow and step into one menu entry's form."""
     result = await hass.config_entries.options.async_init(entry.entry_id)
     return await hass.config_entries.options.async_configure(
-        result["flow_id"], {"next_step_id": f"preset_{preset_id}"}
+        result["flow_id"], {"next_step_id": step_id}
     )
+
+
+async def _preset_form(hass: HomeAssistant, entry: MockConfigEntry, preset_id: str):
+    """Open the options flow and step into one preset's form."""
+    return await _menu_step(hass, entry, f"preset_{preset_id}")
 
 
 def _field_options(result, field: str) -> list[str] | None:
@@ -204,3 +210,30 @@ async def test_preset_form_returns_to_the_menu_after_submit(
         {PRESET_LOW: 20.0, PRESET_HIGH: 22.0, PRESET_MODE: "heat", PRESET_FAN: "auto"},
     )
     assert result["type"] is FlowResultType.MENU
+
+
+# --- The wrapped entity is fixed at creation -------------------------------
+
+
+async def test_basic_options_does_not_offer_the_source_entity(
+    hass: HomeAssistant,
+) -> None:
+    """Re-pointing an entry would orphan its stored mode/fan values and its
+    state subscription, so the source is only settable in the config flow."""
+    entry = await _setup(hass)
+    result = await _menu_step(hass, entry, "basic")
+    assert set(result["data_schema"].schema) == set(STANDARD_PRESETS)
+
+
+async def test_basic_options_submit_leaves_the_source_alone(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass)
+    result = await _menu_step(hass, entry, "basic")
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], {pid: pid in ("home", "sleep", "eco") for pid in STANDARD_PRESETS}
+    )
+    await hass.async_block_till_done()
+
+    assert entry.data[CONF_SOURCE_ENTITY_ID] == SOURCE_ENTITY_ID
+    assert entry.options[CONF_ENABLED_PRESETS] == ["home", "sleep", "eco"]

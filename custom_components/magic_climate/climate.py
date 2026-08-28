@@ -108,12 +108,10 @@ class MagicClimate(ClimateEntity):
         Avoids a full integration reload — recreating the entity races
         against the OptionsFlow being open, and HA's frontend sometimes
         misses the resulting state push so newly enabled presets never
-        appear in the picker. Source-entity changes still require a reload
-        because the state subscription needs to be rebuilt.
+        appear in the picker. Presets are the only thing options can
+        change; the source entity is fixed at entry creation, so the state
+        subscription never needs rebuilding.
         """
-        if entry.data.get(CONF_SOURCE_ENTITY_ID) != self._source_entity_id:
-            hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
-            return
         self._presets = _load_presets(entry)
         if self._attr_preset_mode and self._attr_preset_mode not in {
             p.name for p in self._presets

@@ -20,8 +20,8 @@ async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool
     """Set up Magic Climate from a config entry."""
     await hass.config_entries.async_forward_entry_setups(entry, _platforms())
     # Options changes are handled in place by the climate entity itself —
-    # see MagicClimate._handle_entry_update. A full reload only happens
-    # when the source entity changes (rebuilds the state subscription).
+    # see MagicClimate._handle_entry_update. Nothing an options flow can
+    # change requires a reload; the source entity is fixed at creation.
     return True
 
 

@@ -22,7 +22,7 @@ Copy `custom_components/magic_climate/` to your HA config directory and restart.
 ## Setup
 
 1. **Settings → Devices & Services → + Add Integration → Magic Climate.**
-2. Pick the source `climate.*` entity to wrap.
+2. Pick the source `climate.*` entity to wrap. This is permanent for the entry.
 3. (Optional) give the wrapper a display name.
 
 ## Defining presets
@@ -30,6 +30,7 @@ Copy `custom_components/magic_climate/` to your HA config directory and restart.
 1. On your Magic Climate entry, click **Configure**.
 2. **Basic Options** → pick which of HA's standard presets (Home, Away, Sleep, Eco,
    Comfort, Boost, Activity) to expose. Each enabled preset gets its own menu entry.
+   The wrapped entity is not editable here — see below.
 3. Open a preset → set its low/high temperatures, and optionally an HVAC mode and fan
    mode. Both are dropdowns of what the wrapped entity reports in `hvac_modes` and
    `fan_modes`, so a preset can only ask for a setting the hardware actually has.
@@ -37,6 +38,12 @@ Copy `custom_components/magic_climate/` to your HA config directory and restart.
 4. **Save and exit** when done.
 
 Presets persist in HA's config storage. No restart needed; the wrapper picks up changes immediately.
+
+### Changing the wrapped entity
+
+You can't. The source is fixed when the entry is created: the entry's unique id, the
+entity's state subscription, and every stored mode and fan value are all tied to that
+one source. To wrap something else, delete the entry and add a new one.
 
 ## How presets apply
 
