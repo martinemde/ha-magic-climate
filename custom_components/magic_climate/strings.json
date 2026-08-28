@@ -46,65 +46,72 @@
       },
       "preset_home": {
         "title": "Home Preset",
+        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
         "data": {
           "low": "Low temperature",
           "high": "High temperature",
-          "mode": "Force HVAC mode (optional)",
-          "fan": "Force fan mode (optional)"
+          "mode": "HVAC mode",
+          "fan": "Fan mode"
         }
       },
       "preset_away": {
         "title": "Away Preset",
+        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
         "data": {
           "low": "Low temperature",
           "high": "High temperature",
-          "mode": "Force HVAC mode (optional)",
-          "fan": "Force fan mode (optional)"
+          "mode": "HVAC mode",
+          "fan": "Fan mode"
         }
       },
       "preset_sleep": {
         "title": "Sleep Preset",
+        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
         "data": {
           "low": "Low temperature",
           "high": "High temperature",
-          "mode": "Force HVAC mode (optional)",
-          "fan": "Force fan mode (optional)"
+          "mode": "HVAC mode",
+          "fan": "Fan mode"
         }
       },
       "preset_eco": {
         "title": "Eco Preset",
+        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
         "data": {
           "low": "Low temperature",
           "high": "High temperature",
-          "mode": "Force HVAC mode (optional)",
-          "fan": "Force fan mode (optional)"
+          "mode": "HVAC mode",
+          "fan": "Fan mode"
         }
       },
       "preset_comfort": {
         "title": "Comfort Preset",
+        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
         "data": {
           "low": "Low temperature",
           "high": "High temperature",
-          "mode": "Force HVAC mode (optional)",
-          "fan": "Force fan mode (optional)"
+          "mode": "HVAC mode",
+          "fan": "Fan mode"
         }
       },
       "preset_boost": {
         "title": "Boost Preset",
+        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
         "data": {
           "low": "Low temperature",
           "high": "High temperature",
-          "mode": "Force HVAC mode (optional)",
-          "fan": "Force fan mode (optional)"
+          "mode": "HVAC mode",
+          "fan": "Fan mode"
         }
       },
       "preset_activity": {
         "title": "Activity Preset",
+        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
         "data": {
           "low": "Low temperature",
           "high": "High temperature",
-          "mode": "Force HVAC mode (optional)",
-          "fan": "Force fan mode (optional)"
+          "mode": "HVAC mode",
+          "fan": "Fan mode"
         }
       }
     },

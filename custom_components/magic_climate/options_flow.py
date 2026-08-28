@@ -22,7 +22,26 @@ from .const import (
     TEMP_MIN_C,
 )
 
-_HVAC_MODES = ["off", "heat", "cool", "heat_cool", "auto", "dry", "fan_only"]
+# Presets pick their mode and fan from whatever the source entity reports, so
+# the dropdowns only ever offer settings the hardware actually has. This list
+# is the fallback for when the source is unavailable at options-flow time —
+# HVACMode is a fixed enum, so a static list is still correct there. Fan modes
+# are device-defined and have no equivalent fallback.
+_FALLBACK_HVAC_MODES = ["off", "heat", "cool", "heat_cool", "auto", "dry", "fan_only"]
+
+_HVAC_LABELS = {
+    "off": "Off",
+    "heat": "Heat",
+    "cool": "Cool",
+    "heat_cool": "Heat/Cool",
+    "auto": "Auto",
+    "dry": "Dry",
+    "fan_only": "Fan only",
+}
+
+# Empty string means "the preset does not touch this setting".
+_NO_OVERRIDE = ""
+_NO_OVERRIDE_LABEL = "Leave unchanged"
 
 
 class MagicClimateOptionsFlow(config_entries.OptionsFlow):
@@ -147,16 +166,15 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
                 PRESET_HIGH, default=self._c_to_display(existing[PRESET_HIGH]),
             ): self._temp_selector(),
             vol.Optional(
-                PRESET_MODE, default=existing.get(PRESET_MODE, ""),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=["", *_HVAC_MODES],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
+                PRESET_MODE, default=existing.get(PRESET_MODE, _NO_OVERRIDE),
+            ): self._override_selector(
+                self._source_options("hvac_modes") or _FALLBACK_HVAC_MODES,
+                existing.get(PRESET_MODE),
+                _HVAC_LABELS,
             ),
             vol.Optional(
-                PRESET_FAN, default=existing.get(PRESET_FAN, ""),
-            ): selector.TextSelector(),
+                PRESET_FAN, default=existing.get(PRESET_FAN, _NO_OVERRIDE),
+            ): self._fan_selector(existing.get(PRESET_FAN)),
         })
         return self.async_show_form(
             step_id=f"preset_{preset_id}",
@@ -164,6 +182,62 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders={"preset": preset_id.title()},
         )
+
+    # ------------------------------------------------------- source options
+
+    def _source_options(self, attribute: str) -> list[str]:
+        """Values the source climate entity currently reports for `attribute`.
+
+        Empty when the source is missing or unavailable — callers decide
+        whether a fallback exists.
+        """
+        state = self.hass.states.get(self._source_entity_id)
+        if state is None:
+            return []
+        return [str(value) for value in state.attributes.get(attribute) or []]
+
+    def _override_selector(
+        self,
+        options: list[str],
+        current: str | None,
+        labels: dict[str, str] | None = None,
+    ) -> selector.SelectSelector:
+        """A dropdown of `options` plus a leading "leave unchanged" entry.
+
+        A stored value the source no longer offers is kept in the list so
+        re-pointing at a different unit does not silently drop it.
+        """
+        if current and current not in options:
+            options = [*options, current]
+        labels = labels or {}
+        choices = [
+            selector.SelectOptionDict(value=_NO_OVERRIDE, label=_NO_OVERRIDE_LABEL),
+            *(
+                selector.SelectOptionDict(
+                    value=option,
+                    label=labels.get(option, option.replace("_", " ").capitalize()),
+                )
+                for option in options
+            ),
+        ]
+        return selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=choices,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
+
+    def _fan_selector(self, current: str | None) -> selector.Selector:
+        """Dropdown of the source's fan modes, or free text if it reports none.
+
+        Unlike HVAC modes there is no universal fan vocabulary to fall back
+        on, so a source that is unavailable (or has no fan control) leaves
+        the field as text rather than an empty dropdown.
+        """
+        fan_modes = self._source_options("fan_modes")
+        if not fan_modes:
+            return selector.TextSelector()
+        return self._override_selector(fan_modes, current)
 
     # ---------------------------------------------------------- unit helpers
 

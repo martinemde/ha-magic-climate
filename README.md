@@ -28,8 +28,13 @@ Copy `custom_components/magic_climate/` to your HA config directory and restart.
 ## Defining presets
 
 1. On your Magic Climate entry, click **Configure**.
-2. **Add preset** → enter a name, low/high temperatures, and optional forced HVAC mode / fan.
-3. Repeat for each preset you want. **Save and exit** when done.
+2. **Basic Options** → pick which of HA's standard presets (Home, Away, Sleep, Eco,
+   Comfort, Boost, Activity) to expose. Each enabled preset gets its own menu entry.
+3. Open a preset → set its low/high temperatures, and optionally an HVAC mode and fan
+   mode. Both are dropdowns of what the wrapped entity reports in `hvac_modes` and
+   `fan_modes`, so a preset can only ask for a setting the hardware actually has.
+   Leave either unchanged and the preset won't touch it.
+4. **Save and exit** when done.
 
 Presets persist in HA's config storage. No restart needed; the wrapper picks up changes immediately.
 
