@@ -17,6 +17,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_change,
@@ -98,7 +99,7 @@ async def async_setup_entry(
     )
 
 
-class MagicClimate(ClimateEntity):
+class MagicClimate(ClimateEntity, RestoreEntity):
     """Wraps a source climate.* entity and adds UI-configured presets."""
 
     _attr_should_poll = False
@@ -130,6 +131,7 @@ class MagicClimate(ClimateEntity):
 
     async def async_added_to_hass(self) -> None:
         self._source_state = self.hass.states.get(self._source_entity_id)
+        await self._async_restore_preset()
         self.async_on_remove(
             async_track_state_change_event(
                 self.hass, [self._source_entity_id], self._handle_source_change
@@ -146,6 +148,54 @@ class MagicClimate(ClimateEntity):
         self.async_on_remove(
             async_track_time_change(self.hass, self._handle_minute_tick, second=0)
         )
+
+    async def _async_restore_preset(self) -> None:
+        """Pick the held preset back up after a restart.
+
+        preset_mode used to live only in memory, so a restart dropped it and
+        nothing re-asserted. Peak made that matter: a restart during the
+        window left Home applying the Home band, with no boundary left to
+        correct it.
+
+        Restoring the label on its own would misreport — the source may have
+        been moved while HA was down. So the push that preset implies is
+        reconstructed and handed to the normal drift detector, which decides
+        on the first source event exactly as it would have without the
+        restart. The one case drift cannot judge is a boundary crossed while
+        HA was down, because the source faithfully holds what the previous
+        run pushed; that is re-applied here.
+        """
+        last = await self.async_get_last_state()
+        if last is None:
+            return
+        restored = last.attributes.get("preset_mode")
+        if not restored or self._preset_by_name(restored) is None:
+            return
+
+        preset = self._effective_preset(restored)
+        if preset is None:
+            return
+
+        self._attr_preset_mode = restored
+        # No guard window: this run pushed nothing, so the very next source
+        # event should be judged on its merits.
+        self._pending_apply = {
+            "mode": preset.mode,
+            "temp_kwargs": self._planned_push(preset, self._effective_mode_for(preset)),
+            "fan": preset.fan,
+        }
+        self._pending_apply_deadline = 0.0
+
+        # A peak boundary crossed while HA was down leaves the source holding
+        # the *other* band. Drift would read that as a manual override and
+        # silently drop the preset, so reconcile it here instead.
+        if last.attributes.get("effective_preset") not in (None, preset.name):
+            _LOGGER.debug(
+                "Peak boundary crossed while down; re-applying %r on %s",
+                restored,
+                self._source_entity_id,
+            )
+            await self._async_apply_preset(restored)
 
     async def _handle_entry_update(
         self, hass: HomeAssistant, entry: ConfigEntry
@@ -577,6 +627,38 @@ class MagicClimate(ClimateEntity):
             return
         await self._async_apply_preset(preset_mode)
 
+    def _effective_mode_for(self, preset: Preset) -> str:
+        """The HVAC mode a preset's setpoints get mapped through.
+
+        An explicit override if the preset declares one, otherwise whatever
+        mode the source is in right now.
+        """
+        if preset.mode is not None:
+            return preset.mode
+        current = self.hvac_mode
+        return current.value if current is not None else "off"
+
+    def _planned_push(self, preset: Preset, effective_mode: str) -> dict[str, Any]:
+        """The set_temperature kwargs applying `preset` would send.
+
+        Pure given the preset, the mode, and the source's current flags —
+        which is what lets startup restore reconstruct what a previous run
+        pushed without having to store it.
+
+        Values come back in the *source's* unit, because that is what the
+        source echoes on its next state event and therefore what drift
+        detection has to compare against.
+        """
+        temp_kwargs = self._adapt_temp_kwargs_to_source(
+            compute_service_data(preset, effective_mode), preset
+        )
+        return {
+            key: self._denormalize_temp(val)
+            if key in ("temperature", "target_temp_low", "target_temp_high")
+            else val
+            for key, val in temp_kwargs.items()
+        }
+
     async def _async_apply_preset(self, preset_mode: str) -> None:
         """Push `preset_mode`, substituting Eco's band while peak is open.
 
@@ -591,11 +673,7 @@ class MagicClimate(ClimateEntity):
             _LOGGER.warning("Unknown preset: %r", preset_mode)
             return
 
-        # Decide effective mode: explicit override, else source's current mode.
-        effective_mode = preset.mode
-        if effective_mode is None:
-            current = self.hvac_mode
-            effective_mode = current.value if current is not None else "off"
+        effective_mode = self._effective_mode_for(preset)
 
         # 1. Push mode change first (if the preset declares one).
         if preset.mode is not None and self.hvac_mode != HVACMode(preset.mode):
@@ -608,22 +686,12 @@ class MagicClimate(ClimateEntity):
         # 2. Push temperatures, denormalized for the source unit. The source-
         # unit values are what the source will echo back on its next state
         # event, so store those for drift comparison too.
-        temp_kwargs = self._adapt_temp_kwargs_to_source(
-            compute_service_data(preset, effective_mode), preset
-        )
-        pushed_temp_kwargs: dict[str, Any] = {}
-        if temp_kwargs:
-            data: dict[str, Any] = {"entity_id": self._source_entity_id}
-            for key, val in temp_kwargs.items():
-                if key in ("temperature", "target_temp_low", "target_temp_high"):
-                    pushed = self._denormalize_temp(val)
-                    data[key] = pushed
-                    pushed_temp_kwargs[key] = pushed
-                else:
-                    data[key] = val
-                    pushed_temp_kwargs[key] = val
+        pushed_temp_kwargs = self._planned_push(preset, effective_mode)
+        if pushed_temp_kwargs:
             await self.hass.services.async_call(
-                "climate", "set_temperature", data, blocking=True,
+                "climate", "set_temperature",
+                {"entity_id": self._source_entity_id, **pushed_temp_kwargs},
+                blocking=True,
             )
 
         # 3. Push fan (if declared).

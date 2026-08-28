@@ -66,6 +66,14 @@ If the preset declares a forced `mode`, that mode is pushed first and then used 
 
 Selection is one-shot. Any manual change clears the preset label.
 
+The held preset survives a Home Assistant restart. The label alone would be a
+claim about hardware nobody was watching, so the push it implies is reconstructed
+at startup and handed to the same drift check — if something moved the setpoint
+while HA was down, the preset clears on the first source update, exactly as it
+would have without the restart. Restoring does not command the hardware; the one
+exception is a peak boundary crossed while HA was down, which has no boundary
+left to fire and is reconciled at startup.
+
 ## Peak hours
 
 Utilities charge more during a few hours a day. The **Home & Eco** screen turns that
