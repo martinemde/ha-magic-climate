@@ -7,7 +7,13 @@ from typing import Any
 
 from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACAction, HVACMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME, STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTemperature
+from homeassistant.const import (
+    CONF_NAME,
+    PRECISION_TENTHS,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    UnitOfTemperature,
+)
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
@@ -177,6 +183,36 @@ class MagicClimate(ClimateEntity):
         # (see _normalize_temp / _denormalize_temp) so HA does not apply a
         # second Fahrenheit conversion on top of the source's values.
         return UnitOfTemperature.CELSIUS
+
+    @property
+    def precision(self) -> float:
+        """Round as finely as HA allows, instead of by the system's unit.
+
+        HA's default precision comes from the *system* unit — whole degrees
+        on a Fahrenheit install (see ClimateEntity.precision). That default
+        is meant for an entity reporting its own hardware readings. This
+        wrapper instead reads values the source entity has already rounded
+        to the source's own precision, so a second, coarser rounding here
+        can only destroy resolution the source published. Tenths is HA's
+        finest, which passes the source's value through unchanged.
+
+        Note this governs the setpoints as well as current_temperature —
+        HA has a single precision knob for both. It does not add precision
+        the source didn't have; a whole-degree setpoint stays whole.
+        """
+        return PRECISION_TENTHS
+
+    @property
+    def target_temperature_step(self) -> float | None:
+        """Mirror the source's step so the UI nudges by what it accepts.
+
+        ATTR_TARGET_TEMP_STEP is published raw, in the reporting entity's
+        own unit rather than the system unit, and both the source and this
+        wrapper report Celsius — so this passes through unconverted.
+        """
+        if self._source_state:
+            return self._source_state.attributes.get("target_temp_step")
+        return None
 
     @property
     def _source_unit(self) -> str:
