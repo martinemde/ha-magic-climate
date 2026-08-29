@@ -2,16 +2,19 @@ from datetime import datetime, time
 
 import pytest
 
-from custom_components.magic_climate.peak import (
-    PeakValidationError,
-    PeakWindow,
+from custom_components.magic_climate.schedule import (
+    Schedule,
+    Window,
+    WindowValidationError,
     format_time,
+    minus_minutes,
     parse_time,
-    resolve,
 )
 
-AFTERNOON = PeakWindow(start=time(16, 0), end=time(21, 0))
-OVERNIGHT = PeakWindow(start=time(20, 0), end=time(6, 0))
+AFTERNOON = Window(start=time(16, 0), end=time(21, 0))
+OVERNIGHT = Window(start=time(20, 0), end=time(6, 0))
+NIGHT = Window(start=time(22, 0), end=time(6, 30))
+PRELOAD = Window(start=time(15, 0), end=time(16, 0))
 
 
 def at(hour: int, minute: int = 0) -> datetime:
@@ -42,8 +45,8 @@ def test_format_time_round_trips():
 
 
 def test_equal_start_and_end_is_rejected():
-    with pytest.raises(PeakValidationError, match="must differ"):
-        PeakWindow(start=time(16, 0), end=time(16, 0)).validate()
+    with pytest.raises(WindowValidationError, match="must differ"):
+        Window(start=time(16, 0), end=time(16, 0)).validate()
 
 
 def test_a_normal_window_validates():
@@ -108,7 +111,7 @@ def test_overnight_exactly_at_end_is_off_peak():
 
 def test_degenerate_window_is_never_active():
     """Never rather than always: a mis-saved window should not hold Eco all day."""
-    same = PeakWindow(start=time(16, 0), end=time(16, 0))
+    same = Window(start=time(16, 0), end=time(16, 0))
     assert same.contains(at(16, 0)) is False
     assert same.contains(at(3, 0)) is False
 
@@ -141,37 +144,104 @@ def test_next_start_drops_sub_second_precision():
     assert AFTERNOON.next_start(now) == at(16, 0)
 
 
-# --- substitution ----------------------------------------------------------
+# --- blank windows ---------------------------------------------------------
 
 
-def test_home_becomes_eco_during_peak():
-    assert resolve("home", "home", "eco", in_peak=True) == "eco"
+def test_a_blank_window_is_none():
+    """Blank times are how "I trigger this one myself" is stored."""
+    assert Window.from_dict({"start": "", "end": ""}) is None
 
 
-def test_home_stays_home_off_peak():
-    assert resolve("home", "home", "eco", in_peak=False) == "home"
+def test_half_a_window_is_none():
+    assert Window.from_dict({"start": "22:00:00", "end": ""}) is None
 
 
-def test_other_presets_are_never_substituted():
-    """Only Home is redirected; picking Sleep during peak means Sleep."""
-    assert resolve("sleep", "home", "eco", in_peak=True) == "sleep"
+def test_a_missing_window_is_none():
+    assert Window.from_dict({}) is None
 
 
-def test_eco_itself_is_not_substituted():
-    """Choosing Eco deliberately holds Eco, peak or not."""
-    assert resolve("eco", "home", "eco", in_peak=True) == "eco"
+# --- preload arithmetic ----------------------------------------------------
 
 
-def test_no_substitute_available_is_the_identity():
-    assert resolve("home", "home", None, in_peak=True) == "home"
+def test_minus_minutes_subtracts_within_the_day():
+    assert minus_minutes(time(16, 0), 60) == time(15, 0)
+
+
+def test_minus_minutes_wraps_past_midnight():
+    assert minus_minutes(time(0, 30), 60) == time(23, 30)
+
+
+def test_minus_minutes_keeps_seconds():
+    assert minus_minutes(time(16, 0, 30), 90) == time(14, 30, 30)
+
+
+# --- resolution ------------------------------------------------------------
+
+
+def test_nothing_scheduled_resolves_to_comfort():
+    assert Schedule().resolve(at(18, 0)) == "comfort"
+
+
+def test_nothing_scheduled_does_not_move_home():
+    assert Schedule().moves_home is False
+
+
+def test_any_window_moves_home():
+    assert Schedule(sleep=NIGHT).moves_home is True
+
+
+def test_peak_resolves_to_eco():
+    assert Schedule(peak=AFTERNOON).resolve(at(18, 0)) == "eco"
+
+
+def test_outside_peak_resolves_to_comfort():
+    assert Schedule(peak=AFTERNOON).resolve(at(12, 0)) == "comfort"
+
+
+def test_preload_resolves_to_boost():
+    assert Schedule(peak=AFTERNOON, preload=PRELOAD).resolve(at(15, 30)) == "boost"
+
+
+def test_preload_hands_over_at_peak_start():
+    """The preload window is half-open, so peak owns its own first minute."""
+    schedule = Schedule(peak=AFTERNOON, preload=PRELOAD)
+    assert schedule.resolve(at(15, 59)) == "boost"
+    assert schedule.resolve(at(16, 0)) == "eco"
+
+
+def test_sleep_resolves_to_sleep():
+    assert Schedule(sleep=NIGHT).resolve(at(2, 0)) == "sleep"
+
+
+def test_sleep_outranks_peak():
+    """A night peak loses to the sleep band, on purpose."""
+    schedule = Schedule(peak=OVERNIGHT, sleep=NIGHT)
+    assert schedule.resolve(at(2, 0)) == "sleep"
+
+
+def test_peak_owns_the_evening_before_sleep_starts():
+    """Sleep only outranks peak where they actually overlap."""
+    schedule = Schedule(peak=OVERNIGHT, sleep=NIGHT)
+    assert schedule.resolve(at(21, 0)) == "eco"
+
+
+def test_comfort_returns_once_both_windows_have_closed():
+    schedule = Schedule(peak=OVERNIGHT, sleep=NIGHT)
+    assert schedule.resolve(at(6, 45)) == "comfort"
+
+
+def test_peak_outranks_preload_if_they_ever_overlap():
+    overlapping = Window(start=time(15, 0), end=time(17, 0))
+    schedule = Schedule(peak=AFTERNOON, preload=overlapping)
+    assert schedule.resolve(at(16, 30)) == "eco"
 
 
 # --- round trip ------------------------------------------------------------
 
 
 def test_to_dict_from_dict_round_trip():
-    assert PeakWindow.from_dict(AFTERNOON.to_dict()) == AFTERNOON
+    assert Window.from_dict(AFTERNOON.to_dict()) == AFTERNOON
 
 
 def test_from_dict_accepts_short_time_strings():
-    assert PeakWindow.from_dict({"start": "16:00", "end": "21:00"}) == AFTERNOON
+    assert Window.from_dict({"start": "16:00", "end": "21:00"}) == AFTERNOON

@@ -26,63 +26,123 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     APPLY_GUARD_SECONDS,
+    AUTO_PRESET,
+    BOOST_MINUTES,
+    BOOST_PRELOAD,
+    CONF_BOOST,
     CONF_ENABLED_PRESETS,
     CONF_PEAK,
     CONF_PRESETS,
+    CONF_SLEEP,
     CONF_SOURCE_ENTITY_ID,
+    CONFIGURABLE_PRESETS,
+    DEFAULT_PRELOAD_MINUTES,
     DOMAIN,
     DRIFT_TOLERANCE,
+    OPTIONAL_PRESETS,
     PEAK_ENABLED,
-    PEAK_SUBSTITUTE_FOR,
-    PEAK_SUBSTITUTE_WITH,
-    STANDARD_PRESETS,
+    PRESET_BOOST,
+    PRESET_COMFORT,
+    PRESET_DEFAULTS,
+    PRESET_ECO,
+    PRESET_ORDER,
+    PRESET_SLEEP,
+    WINDOW_END,
+    WINDOW_START,
 )
-from .peak import PeakValidationError, PeakWindow, resolve
 from .presets import Preset, PresetValidationError, compute_service_data
+from .schedule import (
+    Schedule,
+    Window,
+    WindowValidationError,
+    format_time,
+    minus_minutes,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _load_presets(entry: ConfigEntry) -> list[Preset]:
-    """Build the Preset list from entry options, filtering to enabled+valid."""
+def _load_presets(entry: ConfigEntry) -> dict[str, Preset]:
+    """The bands this entry offers, keyed by preset id.
+
+    Comfort and Away are unconditional — Comfort because it is the band Home
+    rests on when nothing else is scheduled, Away because it is the one
+    preset with no window at all and exists purely to be selected. The rest
+    appear only when their checkbox is on.
+
+    Home is deliberately absent. It holds no band of its own; it resolves to
+    one of these by the clock.
+    """
     options = entry.options or {}
     enabled = set(options.get(CONF_ENABLED_PRESETS, []) or [])
     stored = options.get(CONF_PRESETS, {}) or {}
-    presets: list[Preset] = []
-    # STANDARD_PRESETS preserves UI ordering.
-    for pid in STANDARD_PRESETS:
-        if pid not in enabled:
+    presets: dict[str, Preset] = {}
+    for pid in CONFIGURABLE_PRESETS:
+        if pid in OPTIONAL_PRESETS and pid not in enabled:
             continue
-        raw = stored.get(pid)
-        if not raw:
-            continue
+        raw = stored.get(pid) or PRESET_DEFAULTS.get(pid)
         try:
             preset = Preset.from_dict({"name": pid, **raw})
             preset.validate()
         except (PresetValidationError, KeyError, TypeError, ValueError) as err:
             _LOGGER.warning("Skipping invalid preset %r: %s", pid, err)
             continue
-        presets.append(preset)
+        presets[pid] = preset
     return presets
 
 
-def _load_peak(entry: ConfigEntry) -> PeakWindow | None:
-    """The entry's peak window, or None when peak substitution is off.
+def _load_window(raw: dict, label: str) -> Window | None:
+    """One stored window, or None if it is blank or unusable.
 
-    An unparseable or degenerate window is dropped rather than raised: the
-    wrapper must keep working as an ordinary thermostat if the stored peak
-    config is bad.
+    Blank is the ordinary case, not an error: it is how "this preset is
+    triggered by hand" is stored. A window that is present but unparseable
+    is dropped with a warning rather than raised — a bad stored time must
+    not take the thermostat down with it.
     """
-    raw = (entry.options or {}).get(CONF_PEAK) or {}
-    if not raw.get(PEAK_ENABLED):
-        return None
     try:
-        window = PeakWindow.from_dict(raw)
-        window.validate()
-    except (PeakValidationError, KeyError, TypeError, ValueError) as err:
-        _LOGGER.warning("Ignoring invalid peak window %r: %s", raw, err)
+        window = Window.from_dict(raw or {})
+        if window is not None:
+            window.validate()
+    except (WindowValidationError, KeyError, TypeError, ValueError) as err:
+        _LOGGER.warning("Ignoring invalid %s window %r: %s", label, raw, err)
         return None
     return window
+
+
+def _load_schedule(entry: ConfigEntry, presets: dict[str, Preset]) -> Schedule:
+    """The windows that move Home.
+
+    Each one needs its band to exist before it can fire, so switching a
+    preset off disables its window by construction rather than by a second
+    flag that could disagree with the first.
+    """
+    options = entry.options or {}
+
+    peak_raw = options.get(CONF_PEAK) or {}
+    peak = None
+    if peak_raw.get(PEAK_ENABLED) and PRESET_ECO in presets:
+        peak = _load_window(peak_raw, "peak")
+
+    # Preload is derived, not stored: it is the run-up to peak, so it can
+    # only exist where peak does and always ends exactly where peak begins.
+    preload = None
+    boost_raw = options.get(CONF_BOOST) or {}
+    if peak is not None and boost_raw.get(BOOST_PRELOAD) and PRESET_BOOST in presets:
+        minutes = int(boost_raw.get(BOOST_MINUTES) or DEFAULT_PRELOAD_MINUTES)
+        if minutes > 0:
+            preload = _load_window(
+                {
+                    WINDOW_START: format_time(minus_minutes(peak.start, minutes)),
+                    WINDOW_END: format_time(peak.start),
+                },
+                "preload",
+            )
+
+    sleep = None
+    if PRESET_SLEEP in presets:
+        sleep = _load_window(options.get(CONF_SLEEP) or {}, "sleep")
+
+    return Schedule(peak=peak, preload=preload, sleep=sleep)
 
 
 async def async_setup_entry(
@@ -118,11 +178,11 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         self._attr_name = name or source_entity_id
         self._attr_unique_id = f"{DOMAIN}::{entry.entry_id}"
         self._source_state = None
-        self._presets: list[Preset] = _load_presets(entry)
-        self._peak: PeakWindow | None = _load_peak(entry)
-        # Latched so the minute tick can act on the *transition* rather than
-        # re-pushing every minute the window is open.
-        self._peak_active: bool = self._in_peak()
+        self._presets: dict[str, Preset] = _load_presets(entry)
+        self._schedule: Schedule = _load_schedule(entry, self._presets)
+        # Latched so the minute tick can act on the *transition* between
+        # bands rather than re-pushing every minute a window is open.
+        self._scheduled: str = self._schedule.resolve(dt_util.now())
         self._attr_preset_mode: str | None = None
         # Tracks the state the wrapper just pushed; used to suppress drift
         # detection while the source confirms each setting.
@@ -144,7 +204,7 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         # it re-derives the window from the clock every time, so it heals
         # itself across restarts, DST changes, and options edits instead of
         # depending on a timer that was armed under the old configuration.
-        self._peak_active = self._in_peak()
+        self._scheduled = self._schedule.resolve(dt_util.now())
         self.async_on_remove(
             async_track_time_change(self.hass, self._handle_minute_tick, second=0)
         )
@@ -153,9 +213,9 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         """Pick the held preset back up after a restart.
 
         preset_mode used to live only in memory, so a restart dropped it and
-        nothing re-asserted. Peak made that matter: a restart during the
-        window left Home applying the Home band, with no boundary left to
-        correct it.
+        nothing re-asserted. The schedule made that matter: a restart inside
+        a window left Home applying the Comfort band, with no boundary left
+        to correct it.
 
         Restoring the label on its own would misreport — the source may have
         been moved while HA was down. So the push that preset implies is
@@ -169,7 +229,7 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         if last is None:
             return
         restored = last.attributes.get("preset_mode")
-        if not restored or self._preset_by_name(restored) is None:
+        if not restored or restored not in (self.preset_modes or []):
             return
 
         preset = self._effective_preset(restored)
@@ -180,18 +240,17 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         # No guard window: this run pushed nothing, so the very next source
         # event should be judged on its merits.
         self._pending_apply = {
-            "mode": preset.mode,
-            "temp_kwargs": self._planned_push(preset, self._effective_mode_for(preset)),
+            "temp_kwargs": self._planned_push(preset),
             "fan": preset.fan,
         }
         self._pending_apply_deadline = 0.0
 
-        # A peak boundary crossed while HA was down leaves the source holding
-        # the *other* band. Drift would read that as a manual override and
-        # silently drop the preset, so reconcile it here instead.
+        # A window boundary crossed while HA was down leaves the source
+        # holding a different band. Drift would read that as a manual
+        # override and silently drop the preset, so reconcile it here.
         if last.attributes.get("effective_preset") not in (None, preset.name):
             _LOGGER.debug(
-                "Peak boundary crossed while down; re-applying %r on %s",
+                "Schedule moved while down; re-applying %r on %s",
                 restored,
                 self._source_entity_id,
             )
@@ -205,20 +264,20 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         Avoids a full integration reload — recreating the entity races
         against the OptionsFlow being open, and HA's frontend sometimes
         misses the resulting state push so newly enabled presets never
-        appear in the picker. Presets and the peak window are the only
-        things options can change; the source entity is fixed at entry
-        creation, so the state subscription never needs rebuilding.
+        appear in the picker. Presets and the schedule are the only things
+        options can change; the source entity is fixed at entry creation, so
+        the state subscription never needs rebuilding.
 
         Reloading does not re-push. Editing a band while holding its preset
         takes effect the next time the preset is applied, which keeps the
         one-shot contract: options edits never command the hardware.
         """
         self._presets = _load_presets(entry)
-        self._peak = _load_peak(entry)
-        self._peak_active = self._in_peak()
-        if self._attr_preset_mode and self._attr_preset_mode not in {
-            p.name for p in self._presets
-        }:
+        self._schedule = _load_schedule(entry, self._presets)
+        self._scheduled = self._schedule.resolve(dt_util.now())
+        if self._attr_preset_mode and self._attr_preset_mode not in (
+            self.preset_modes or []
+        ):
             self._attr_preset_mode = None
             self._pending_apply = None
         self.async_write_ha_state()
@@ -251,10 +310,6 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         expected = self._pending_apply
         attrs = self._source_state.attributes
 
-        # Mode check
-        if expected["mode"] is not None and self._source_state.state != expected["mode"]:
-            return True
-
         # Temperature check
         for key, expected_val in expected["temp_kwargs"].items():
             actual = attrs.get(key)
@@ -269,96 +324,103 @@ class MagicClimate(ClimateEntity, RestoreEntity):
 
         return False
 
-    # ------------------------------------------------------------ peak window
-
-    def _in_peak(self) -> bool:
-        """Whether the peak window is open right now, by the wall clock."""
-        return self._peak is not None and self._peak.contains(dt_util.now())
-
-    def _substitute_name(self) -> str | None:
-        """The preset that stands in during peak, if it is available.
-
-        `self._presets` holds only enabled, valid presets, so this returns
-        None whenever Eco is switched off — which is the nesting the options
-        screen implies: no Eco, nothing to substitute.
-        """
-        if self._peak is None:
-            return None
-        if any(p.name == PEAK_SUBSTITUTE_WITH for p in self._presets):
-            return PEAK_SUBSTITUTE_WITH
-        return None
+    # --------------------------------------------------------------- schedule
 
     def _preset_by_name(self, name: str) -> Preset | None:
-        return next((p for p in self._presets if p.name == name), None)
+        return self._presets.get(name)
 
     def _effective_preset(self, requested: str) -> Preset | None:
         """The preset whose band actually gets pushed for `requested`.
 
-        During peak this is Eco in place of Home. The *reported* preset stays
-        whatever was requested — see async_set_preset_mode.
+        Only Home is ever redirected. Every other preset is its own band —
+        picking Eco holds Eco whether or not peak is open — which is what
+        makes selecting anything a manual override of the schedule.
+
+        The *reported* preset stays whatever was requested; see
+        _async_apply_preset for why that matters.
         """
-        target = resolve(
-            requested,
-            PEAK_SUBSTITUTE_FOR,
-            self._substitute_name(),
-            self._in_peak(),
+        if requested != AUTO_PRESET:
+            return self._presets.get(requested)
+        target = (
+            self._schedule.resolve(dt_util.now())
+            if self._schedule.moves_home
+            else PRESET_COMFORT
         )
-        return self._preset_by_name(target) or self._preset_by_name(requested)
+        return self._presets.get(target) or self._presets.get(PRESET_COMFORT)
 
     async def _handle_minute_tick(self, now: datetime) -> None:
-        """Re-apply the Home preset when the peak window opens or closes.
+        """Move Home to the band the clock now calls for.
 
         This is the one place the wrapper writes without being asked, so it
-        is deliberately narrow: it fires only on a boundary crossing, only
-        while Home is still the held preset, and only when a substitute
-        exists. A manual touch or a wall thermostat will already have
-        cleared preset_mode via drift detection, so this can never overwrite
-        anything but the wrapper's own earlier push.
+        is deliberately narrow: only on a change of resolved band, only while
+        Home is the held preset, and only when something is scheduled to move
+        it. A manual touch or a wall thermostat will already have cleared
+        preset_mode via drift detection, so this can never overwrite anything
+        but the wrapper's own earlier push.
+
+        A minute tick rather than re-armed point-in-time callbacks: it
+        re-derives every window from the wall clock, so it heals itself
+        across restarts, DST changes, and options edits instead of depending
+        on timers armed under the old configuration.
         """
-        in_peak = self._in_peak()
-        if in_peak == self._peak_active:
+        scheduled = self._schedule.resolve(dt_util.now())
+        if scheduled == self._scheduled:
             return
-        self._peak_active = in_peak
+        previous, self._scheduled = self._scheduled, scheduled
 
         if (
-            self._attr_preset_mode == PEAK_SUBSTITUTE_FOR
-            and self._substitute_name() is not None
+            self._attr_preset_mode == AUTO_PRESET
+            and self._schedule.moves_home
             and self.available
         ):
             _LOGGER.debug(
-                "Peak %s; re-applying %r on %s",
-                "started" if in_peak else "ended",
-                PEAK_SUBSTITUTE_FOR,
+                "Schedule moved %s -> %s; re-applying %r on %s",
+                previous,
+                scheduled,
+                AUTO_PRESET,
                 self._source_entity_id,
             )
-            await self._async_apply_preset(PEAK_SUBSTITUTE_FOR)
+            await self._async_apply_preset(AUTO_PRESET)
         else:
             self.async_write_ha_state()
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Peak state, exposed as clock times rather than only a flag.
+        """Which band is really applied, and when peak next moves.
 
-        A consumer that wants to pre-cool needs to know *when* peak starts,
-        not just whether it is running, so the boundaries are published as
-        absolute next-occurrence timestamps.
+        `effective_preset` is the one attribute that always publishes: while
+        Home is held it is the only way to see which band the schedule chose,
+        and the restart path reads it back to tell a crossed boundary apart
+        from a manual override.
+
+        Peak is additionally published as clock times and absolute next
+        occurrences, because a consumer that wants to pre-cool needs to know
+        *when* peak starts, not just whether it is running. These change at
+        most a few times a day, so they do not churn the recorder.
         """
-        if self._peak is None:
-            return {"peak_active": False}
-        now = dt_util.now()
         effective = None
         if self._attr_preset_mode is not None:
             preset = self._effective_preset(self._attr_preset_mode)
             effective = preset.name if preset else None
-        window = self._peak.to_dict()
-        return {
-            "peak_active": self._in_peak(),
-            "peak_start": window["start"],
-            "peak_end": window["end"],
-            "next_peak_start": self._peak.next_start(now).isoformat(),
-            "next_peak_end": self._peak.next_end(now).isoformat(),
+
+        attrs: dict[str, Any] = {
+            "peak_active": False,
             "effective_preset": effective,
         }
+        peak = self._schedule.peak
+        if peak is not None:
+            now = dt_util.now()
+            window = peak.to_dict()
+            attrs.update(
+                {
+                    "peak_active": peak.contains(now),
+                    "peak_start": window["start"],
+                    "peak_end": window["end"],
+                    "next_peak_start": peak.next_start(now).isoformat(),
+                    "next_peak_end": peak.next_end(now).isoformat(),
+                }
+            )
+        return attrs
 
     @property
     def available(self) -> bool:
@@ -535,9 +597,19 @@ class MagicClimate(ClimateEntity, RestoreEntity):
 
     @property
     def preset_modes(self) -> list[str] | None:
+        """Home first, then every band that can be pinned by hand.
+
+        Comfort is hidden while nothing is scheduled: Home already *is* the
+        Comfort band then, and two picker entries pushing identical setpoints
+        are two names for one thing.
+        """
         if not self._presets:
             return None
-        return [p.name for p in self._presets]
+        available = set(self._presets)
+        available.add(AUTO_PRESET)
+        if not self._schedule.moves_home:
+            available.discard(PRESET_COMFORT)
+        return [pid for pid in PRESET_ORDER if pid in available]
 
     @property
     def preset_mode(self) -> str | None:
@@ -622,26 +694,26 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         )
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
-        if self._preset_by_name(preset_mode) is None:
+        if preset_mode not in (self.preset_modes or []):
             _LOGGER.warning("Unknown preset: %r", preset_mode)
             return
         await self._async_apply_preset(preset_mode)
 
-    def _effective_mode_for(self, preset: Preset) -> str:
+    @property
+    def _source_mode(self) -> str:
         """The HVAC mode a preset's setpoints get mapped through.
 
-        An explicit override if the preset declares one, otherwise whatever
-        mode the source is in right now.
+        Always whatever the source is in. Presets carry no mode of their own:
+        heating or cooling is a seasonal decision made once for the unit, not
+        something a comfort band flips on the way past.
         """
-        if preset.mode is not None:
-            return preset.mode
         current = self.hvac_mode
         return current.value if current is not None else "off"
 
-    def _planned_push(self, preset: Preset, effective_mode: str) -> dict[str, Any]:
+    def _planned_push(self, preset: Preset) -> dict[str, Any]:
         """The set_temperature kwargs applying `preset` would send.
 
-        Pure given the preset, the mode, and the source's current flags —
+        Pure given the preset and the source's current mode and flags —
         which is what lets startup restore reconstruct what a previous run
         pushed without having to store it.
 
@@ -650,7 +722,7 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         detection has to compare against.
         """
         temp_kwargs = self._adapt_temp_kwargs_to_source(
-            compute_service_data(preset, effective_mode), preset
+            compute_service_data(preset, self._source_mode), preset
         )
         return {
             key: self._denormalize_temp(val)
@@ -660,33 +732,23 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         }
 
     async def _async_apply_preset(self, preset_mode: str) -> None:
-        """Push `preset_mode`, substituting Eco's band while peak is open.
+        """Push `preset_mode`, resolving Home to whatever the clock calls for.
 
         `preset_mode` is what gets *reported* afterwards; `preset` is what
         actually gets pushed. Keeping them separate is what stops the
-        substitution from feeding back: preset_mode never changes, so no
-        automation sees an event, and drift is measured against the values
-        really sent rather than against the requested preset's band.
+        schedule from feeding back: preset_mode stays "home" across every
+        boundary, so no automation sees an event, and drift is measured
+        against the values really sent rather than the Comfort band.
         """
         preset = self._effective_preset(preset_mode)
         if preset is None:
             _LOGGER.warning("Unknown preset: %r", preset_mode)
             return
 
-        effective_mode = self._effective_mode_for(preset)
-
-        # 1. Push mode change first (if the preset declares one).
-        if preset.mode is not None and self.hvac_mode != HVACMode(preset.mode):
-            await self.hass.services.async_call(
-                "climate", "set_hvac_mode",
-                {"entity_id": self._source_entity_id, "hvac_mode": preset.mode},
-                blocking=True,
-            )
-
-        # 2. Push temperatures, denormalized for the source unit. The source-
+        # 1. Push temperatures, denormalized for the source unit. The source-
         # unit values are what the source will echo back on its next state
         # event, so store those for drift comparison too.
-        pushed_temp_kwargs = self._planned_push(preset, effective_mode)
+        pushed_temp_kwargs = self._planned_push(preset)
         if pushed_temp_kwargs:
             await self.hass.services.async_call(
                 "climate", "set_temperature",
@@ -694,7 +756,7 @@ class MagicClimate(ClimateEntity, RestoreEntity):
                 blocking=True,
             )
 
-        # 3. Push fan (if declared).
+        # 2. Push fan (if declared).
         if preset.fan is not None and self.fan_mode != preset.fan:
             await self.hass.services.async_call(
                 "climate", "set_fan_mode",
@@ -702,11 +764,10 @@ class MagicClimate(ClimateEntity, RestoreEntity):
                 blocking=True,
             )
 
-        # Store the preset's *declared* mode/fan (possibly None). Drift is
-        # measured only against properties the preset actually specifies —
-        # changing an unspecified property does not exit the preset.
+        # Store the preset's *declared* fan (possibly None). Drift is measured
+        # only against properties the preset actually specifies — nudging the
+        # fan does not exit a band-only preset.
         self._pending_apply = {
-            "mode": preset.mode,
             "temp_kwargs": dict(pushed_temp_kwargs),
             "fan": preset.fan,
         }

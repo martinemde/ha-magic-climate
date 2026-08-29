@@ -2,10 +2,10 @@
 
 A generic Home Assistant custom integration that wraps any `climate.*` entity to add:
 
-- **UI-configured presets** — define `away`, `home`, `eco`, `sleep`, … in HA's options flow. No YAML. No device reflashing.
+- **UI-configured presets** — define Comfort, Away, Eco, Boost and Sleep bands in HA's options flow. No YAML. No device reflashing.
 - **Dual-setpoint UI fix** — auto-detected. Climate entities that support `HEAT_COOL` with `target_temperature_range` get one slider in HEAT/COOL/AUTO and two in HEAT_COOL. The native HA thermostat card otherwise misbehaves for these entities.
 - **Fahrenheit normalization** — auto-detected. Source entities that report °F on a °F HA instance no longer trigger HA's double-conversion bug.
-- **Peak-hour Eco substitution** — during a daily peak window, selecting Home quietly applies the Eco band instead, while still reporting `home`.
+- **A Home preset that follows the clock** — Home holds Comfort by default, swaps to Eco during peak hours, to Boost while preloading ahead of them, and to Sleep overnight, still reporting `home` throughout. Pick any of those yourself to pin it.
 
 ## Installation
 
@@ -28,96 +28,100 @@ Copy `custom_components/magic_climate/` to your HA config directory and restart.
 
 ## Defining presets
 
-1. On your Magic Climate entry, click **Configure**.
-2. **Basic Options** → pick which of HA's standard presets (Home, Away, Sleep,
-   Comfort, Boost, Activity) to expose. Each enabled preset gets its own menu entry.
-   Eco is not here — it lives on the **Home & Eco** screen, beside the peak settings
-   that depend on it. The wrapped entity is not editable here either; see below.
-3. **Home & Eco** → both bands on one screen, plus the peak window. See
-   [Peak hours](#peak-hours).
-4. Open any other preset → set its low/high temperatures, and optionally an HVAC mode
-   and fan mode. Both are dropdowns of what the wrapped entity reports in `hvac_modes`
-   and `fan_modes`, so a preset can only ask for a setting the hardware actually has.
-   Leave either unchanged and the preset won't touch it.
-5. **Save and exit** when done.
+**Settings → Devices & Services → Magic Climate → Configure.** Everything is on
+one page, because none of these bands means anything on its own: Eco is Comfort
+minus what you will pay for at peak, Boost is what you do to Comfort just before
+that, and Sleep is Comfort with nobody watching.
 
-Presets persist in HA's config storage. No restart needed; the wrapper picks up changes immediately.
+| Section | What it is |
+|---|---|
+| **Home Comfort** | Your standard band. Home holds it unless something below moves it. |
+| **Away** | The band for an empty house. No schedule — wire an away trigger in HA to select it. |
+| **Eco energy saver** | The band for when energy costs more, plus the peak window and the switch that has Home swap into it. |
+| **Boost** | A band that drives the room past Comfort while power is cheap, plus how many minutes before peak to start. |
+| **Sleep** | The overnight band and its window. |
 
-### Changing the wrapped entity
+Each band is a low, a high, and an optional fan mode taken from what the wrapped
+entity reports in `fan_modes`. Presets carry no HVAC mode: heating or cooling is
+a seasonal decision made once for the unit, not something a comfort band should
+flip on the way past.
 
-You can't. The source is fixed when the entry is created: the entry's unique id, the
-entity's state subscription, and every stored mode and fan value are all tied to that
-one source. To wrap something else, delete the entry and add a new one.
+Eco, Boost and Sleep each have a checkbox that creates the preset. Creating one
+only adds it to the picker — it starts applying on its own when you also give it
+a window (and, for Eco, switch on "Home switches between Comfort and Eco"). Leave
+the times blank and the band exists purely to be selected, by you or by an
+automation.
 
-**Renaming it is fine, though.** The wrapper tracks its source in the entity registry
-and follows an entity-id change, rewriting the stored source and the entry's unique id
-before reloading. Renaming used to break the wrapper silently — it stayed subscribed to
-an id nothing published and went unavailable with nothing logged.
+Changes persist in HA's config storage and are picked up immediately. No restart.
 
-The wrapper does not attach itself to the source's device. That is deliberate rather than
-an oversight: a helper inherits its device's area, and the right area for a wrapper is not
-always the area the source's device sits in. If the source is deleted outright, the
-wrapper logs a warning and goes unavailable; there is nothing to repoint at.
+## How Home resolves
+
+Home holds no band of its own. It resolves by the wall clock, in this order:
+
+| Window open | Home applies |
+|---|---|
+| Sleep | the Sleep band |
+| Peak | the Eco band |
+| Preload (the run-up to peak) | the Boost band |
+| nothing | the Comfort band |
+
+Sleep outranks peak on purpose: a night band exists because someone is asleep in
+the room, and the saving from holding Eco through it is not worth waking up for.
+Boost sits under peak only for completeness — the preload window ends exactly
+where peak begins, so the two never actually overlap.
+
+`preset_mode` reads `home` the whole time. That is the point: the label never
+changes, so nothing downstream sees an event to react to, and drift is measured
+against the band really pushed rather than against Comfort. The band in force is
+published separately as `effective_preset`.
+
+**Selecting anything else pins it.** Comfort during peak holds Comfort. Eco at
+noon holds Eco. That is also what makes a preset with blank times useful — it is
+reachable only that way.
+
+While nothing is scheduled, Home *is* the Comfort band, and Comfort is left out
+of the picker rather than sitting there as a second name for the same setpoints.
 
 ## How presets apply
 
-A preset always declares a comfort *band* (low + high). When you select a preset, the wrapper pushes setpoints to the source based on the source's **current** HVAC mode:
+A preset always declares a band (low + high). When one is applied, the wrapper
+pushes setpoints to the source based on the source's **current** HVAC mode:
 
 | Source mode | Pushed |
 |---|---|
-| `HEAT_COOL` | `target_temp_low = low`, `target_temp_high = high` |
-| `AUTO` | `temperature = midpoint(low, high)` — unit applies its own deadband |
-| `HEAT` | `temperature = low` (heat *to at least*) |
-| `COOL` | `temperature = high` (cool *to at most*) |
-| `DRY` | `temperature = high` |
-| `FAN_ONLY` / `OFF` | no temperature push |
+| `heat_cool` | `target_temp_low` = low, `target_temp_high` = high |
+| `auto` | `temperature` = midpoint (the unit applies its own deadband) |
+| `heat` | `temperature` = low |
+| `cool` / `dry` | `temperature` = high |
+| `fan_only` / `off` | nothing |
 
-If the preset declares a forced `mode`, that mode is pushed first and then used for the mapping. A forced `fan` is pushed after the temps.
+A declared `fan` is pushed after the temps.
 
-Selection is one-shot. Any manual change clears the preset label.
+Applying is one-shot — push, then walk away. There is no control loop and no
+re-assertion on drift: any manual change clears the preset label, which is also
+what stops the schedule from ever fighting a wall thermostat that has taken the
+setpoint. The only write the wrapper makes unasked is moving Home across a window
+boundary, and that fires only while Home is still the held preset.
 
 The held preset survives a Home Assistant restart. The label alone would be a
 claim about hardware nobody was watching, so the push it implies is reconstructed
-at startup and handed to the same drift check — if something moved the setpoint
-while HA was down, the preset clears on the first source update, exactly as it
-would have without the restart. Restoring does not command the hardware; the one
-exception is a peak boundary crossed while HA was down, which has no boundary
-left to fire and is reconciled at startup.
+and handed to the normal drift check. If something moved the setpoint while HA
+was down, the preset clears on the first source update, exactly as it would have
+without the restart. The one exception is a window boundary crossed while HA was
+down, which has no boundary left to fire and is re-applied at startup.
 
-## Peak hours
+## Published state
 
-Utilities charge more during a few hours a day. The **Home & Eco** screen turns that
-into a rule: while the peak window is open, selecting **Home** pushes the **Eco** band
-instead.
-
-The wrapper keeps reporting `home` the whole time. That is the point — the preset never
-changes, so no automation, dashboard, or wall thermostat sees an event to react to, and
-nothing can feed back into the wrapper's own drift detection.
-
-| | |
+| Attribute | Example |
 |---|---|
-| Requires | the Eco preset enabled, on the same screen |
-| Applies to | `home` only — every other preset is pushed as configured |
-| Choosing Eco yourself | holds Eco until you change it, peak or not |
-| Schedule | every day; a window ending before it starts runs overnight |
-| Boundaries | half-open — peak is over the instant it ends |
-
-At the start and end of the window the wrapper re-pushes, but only if **Home is still
-the held preset**. If anything else has touched the setpoint since, drift detection has
-already cleared the preset, and peak leaves it alone until you pick a preset again. This
-is the only time the wrapper writes without being asked.
-
-Peak state is published as attributes, with boundaries as timestamps so an automation
-can act *ahead* of the window (pre-cooling, say):
-
-| attribute | example |
-|---|---|
+| `effective_preset` | `"eco"` while `preset_mode` reads `"home"` |
 | `peak_active` | `true` |
 | `peak_start` / `peak_end` | `"16:00:00"` / `"21:00:00"` |
 | `next_peak_start` / `next_peak_end` | `"2026-08-29T16:00:00-07:00"` |
-| `effective_preset` | `"eco"` while `preset_mode` reads `"home"` |
 
-Turning peak off, or disabling Eco, restores plain preset behavior.
+Peak boundaries are published as absolute timestamps so an automation can act
+ahead of the window. They change at most a few times a day, so they do not churn
+the recorder.
 
 ## How the dual-setpoint UI fix works
 

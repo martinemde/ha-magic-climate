@@ -133,7 +133,7 @@ async def _setup(
 
     entry = MockConfigEntry(
         domain=DOMAIN,
-        version=2,  # matches config_flow.VERSION; avoids the v1->v2 migration
+        version=4,  # matches config_flow.VERSION; skips migration entirely
         data={CONF_SOURCE_ENTITY_ID: SOURCE_ENTITY_ID, CONF_NAME: "Bedroom Magic"},
         options=options,
     )
@@ -259,41 +259,43 @@ async def test_single_only_source_round_trips(hass: HomeAssistant) -> None:
     assert _magic(hass).attributes[ATTR_TEMPERATURE] == pytest.approx(73.0, abs=0.5)
 
 
-# --- Presets (main's standard-preset model) ---------------------------------
+# --- Presets ----------------------------------------------------------------
 
-# A "comfort" preset stored in °C, chosen so both edges land on whole °F:
-# low(heat)=20 -> 68 °F, high(cool)=25 -> 77 °F.
+# The Comfort band stored in °C, chosen so both edges land on whole °F:
+# low(heat)=20 -> 68 °F, high(cool)=25 -> 77 °F. Home applies it, since
+# nothing here is scheduled to move Home off it.
 COMFORT = {"comfort": {"low": 20.0, "high": 25.0}}
 
 
+async def _apply_home(hass: HomeAssistant) -> None:
+    await hass.services.async_call(
+        "climate", "set_preset_mode",
+        {ATTR_ENTITY_ID: MAGIC_ENTITY_ID, "preset_mode": "home"}, blocking=True,
+    )
+    await hass.async_block_till_done()
+
+
 async def test_presets_exposed(hass: HomeAssistant) -> None:
-    await _setup(hass, enabled=["comfort"], presets=COMFORT)
+    """With no schedule, Comfort is not offered separately — Home is it."""
+    await _setup(hass, enabled=[], presets=COMFORT)
     state = _magic(hass)
     assert state.attributes["supported_features"] & ClimateEntityFeature.PRESET_MODE
-    assert state.attributes["preset_modes"] == ["comfort"]
+    assert state.attributes["preset_modes"] == ["home", "away"]
 
 
 async def test_preset_in_cool_mode_sends_full_band(hass: HomeAssistant) -> None:
     """Range-only source: a single-mode preset is sent as the whole band and
     the source picks the side it needs (both edges land on the preset band)."""
-    source = await _setup(hass, enabled=["comfort"], presets=COMFORT)
-    await hass.services.async_call(
-        "climate", "set_preset_mode",
-        {ATTR_ENTITY_ID: MAGIC_ENTITY_ID, "preset_mode": "comfort"}, blocking=True,
-    )
-    await hass.async_block_till_done()
+    source = await _setup(hass, enabled=[], presets=COMFORT)
+    await _apply_home(hass)
     assert source.target_temperature_low == pytest.approx(68.0, abs=0.5)
     assert source.target_temperature_high == pytest.approx(77.0, abs=0.5)
 
 
 async def test_preset_in_heat_cool_mode_sets_both(hass: HomeAssistant) -> None:
-    source = await _setup(hass, enabled=["comfort"], presets=COMFORT)
+    source = await _setup(hass, enabled=[], presets=COMFORT)
     await _set_mode(hass, "heat_cool")
-    await hass.services.async_call(
-        "climate", "set_preset_mode",
-        {ATTR_ENTITY_ID: MAGIC_ENTITY_ID, "preset_mode": "comfort"}, blocking=True,
-    )
-    await hass.async_block_till_done()
+    await _apply_home(hass)
     assert source.target_temperature_low == pytest.approx(68.0, abs=0.5)
     assert source.target_temperature_high == pytest.approx(77.0, abs=0.5)
 
@@ -312,13 +314,9 @@ async def test_manual_change_clears_active_preset(
 
     monkeypatch.setattr(climate_mod, "APPLY_GUARD_SECONDS", 0.0)
 
-    await _setup(hass, enabled=["comfort"], presets=COMFORT)
-    await hass.services.async_call(
-        "climate", "set_preset_mode",
-        {ATTR_ENTITY_ID: MAGIC_ENTITY_ID, "preset_mode": "comfort"}, blocking=True,
-    )
-    await hass.async_block_till_done()
-    assert _magic(hass).attributes.get("preset_mode") == "comfort"
+    await _setup(hass, enabled=[], presets=COMFORT)
+    await _apply_home(hass)
+    assert _magic(hass).attributes.get("preset_mode") == "home"
 
     await _set_temp(hass, temperature=73.0)  # cool: moves high to 73, low stays 68
     assert _magic(hass).attributes.get("preset_mode") is None

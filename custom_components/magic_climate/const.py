@@ -6,69 +6,105 @@ CONF_SOURCE_ENTITY_ID = "source_entity_id"
 CONF_PRESETS = "presets"
 CONF_ENABLED_PRESETS = "enabled_presets"
 CONF_PEAK = "peak"
+CONF_BOOST = "boost"
+CONF_SLEEP = "sleep"
 
 # Preset dict keys (stored in entry.options[CONF_PRESETS][<preset_id>])
 PRESET_LOW = "low"
 PRESET_HIGH = "high"
-PRESET_MODE = "mode"
 PRESET_FAN = "fan"
 
-# Peak dict keys (stored in entry.options[CONF_PEAK])
+# Window dict keys. A blank start or end means the window never fires and the
+# preset is reached only by selecting it — see schedule.Window.from_dict.
+WINDOW_START = "start"
+WINDOW_END = "end"
+
+# entry.options[CONF_PEAK]
 PEAK_ENABLED = "enabled"
-PEAK_START = "start"
-PEAK_END = "end"
+
+# entry.options[CONF_BOOST]
+BOOST_PRELOAD = "preload"
+BOOST_MINUTES = "minutes"
 
 # HA's standard climate preset names. These are the only preset IDs we expose;
 # names are matched against homeassistant.components.climate.const.PRESET_*.
 PRESET_HOME = "home"
-PRESET_AWAY = "away"
-PRESET_SLEEP = "sleep"
-PRESET_ECO = "eco"
 PRESET_COMFORT = "comfort"
+PRESET_AWAY = "away"
+PRESET_ECO = "eco"
 PRESET_BOOST = "boost"
-PRESET_ACTIVITY = "activity"
+PRESET_SLEEP = "sleep"
 
-STANDARD_PRESETS: tuple[str, ...] = (
+# Home holds no band of its own. It is the automatic preset: it resolves to
+# one of the others by the wall clock, and reports "home" the whole time.
+AUTO_PRESET = PRESET_HOME
+
+# Always available. Comfort is the band Home falls back to, so it is not
+# optional; Away has no window and is reached by a presence automation.
+BASE_PRESETS: tuple[str, ...] = (PRESET_COMFORT, PRESET_AWAY)
+
+# Each has a checkbox in the options flow. Order is picker order.
+OPTIONAL_PRESETS: tuple[str, ...] = (PRESET_ECO, PRESET_BOOST, PRESET_SLEEP)
+
+# Every band the options flow stores, whether or not it is currently offered.
+# Toggling a preset off and back on restores the values it had.
+CONFIGURABLE_PRESETS: tuple[str, ...] = (*BASE_PRESETS, *OPTIONAL_PRESETS)
+
+# Picker order: the automatic one first, then the band it rests on, then
+# everything that pins a specific band.
+PRESET_ORDER: tuple[str, ...] = (
     PRESET_HOME,
-    PRESET_AWAY,
-    PRESET_SLEEP,
-    PRESET_ECO,
     PRESET_COMFORT,
+    PRESET_AWAY,
+    PRESET_ECO,
     PRESET_BOOST,
-    PRESET_ACTIVITY,
+    PRESET_SLEEP,
 )
-
-DEFAULT_ENABLED_PRESETS: tuple[str, ...] = (PRESET_HOME, PRESET_AWAY, PRESET_SLEEP)
-
-# During the peak window, asking for PEAK_SUBSTITUTE_FOR pushes
-# PEAK_SUBSTITUTE_WITH's band instead. The reported preset_mode stays the
-# requested one, so nothing downstream sees a preset change to react to.
-PEAK_SUBSTITUTE_FOR = PRESET_HOME
-PEAK_SUBSTITUTE_WITH = PRESET_ECO
 
 # A typical afternoon time-of-use peak. Applies every day; utilities that
 # exempt weekends are not modeled.
 DEFAULT_PEAK_START = "16:00:00"
 DEFAULT_PEAK_END = "21:00:00"
 
+# How long before peak the Boost band runs when preloading. An hour is a
+# starting point, not a measurement — the right value is a property of the
+# building's thermal mass and is meant to be tuned per room.
+DEFAULT_PRELOAD_MINUTES = 60
+MIN_PRELOAD_MINUTES = 5
+MAX_PRELOAD_MINUTES = 240
+
 
 def default_peak() -> dict:
     """Peak config for an entry that has never had one: off, but populated."""
     return {
         PEAK_ENABLED: False,
-        PEAK_START: DEFAULT_PEAK_START,
-        PEAK_END: DEFAULT_PEAK_END,
+        WINDOW_START: DEFAULT_PEAK_START,
+        WINDOW_END: DEFAULT_PEAK_END,
     }
 
-# Sensible per-preset defaults in °C. User adjusts via options flow.
+
+def default_boost() -> dict:
+    """Boost preload for an entry that has never had one."""
+    return {BOOST_PRELOAD: False, BOOST_MINUTES: DEFAULT_PRELOAD_MINUTES}
+
+
+def default_sleep() -> dict:
+    """Sleep window for an entry that has never had one: manual, no times."""
+    return {WINDOW_START: "", WINDOW_END: ""}
+
+
+# Sensible per-preset defaults in °C. User adjusts via the options flow.
+#
+# Boost is a narrow band straddling Comfort's midpoint rather than a wider or
+# warmer one: preloading means driving the room *past* where Comfort would
+# settle, so both edges move inward — heat to a higher floor, cool to a lower
+# ceiling — before the expensive hours start.
 PRESET_DEFAULTS: dict[str, dict[str, float]] = {
-    PRESET_HOME:     {PRESET_LOW: 20.0, PRESET_HIGH: 22.0},
-    PRESET_AWAY:     {PRESET_LOW: 16.0, PRESET_HIGH: 26.0},
-    PRESET_SLEEP:    {PRESET_LOW: 18.0, PRESET_HIGH: 21.0},
-    PRESET_ECO:      {PRESET_LOW: 17.0, PRESET_HIGH: 25.0},
-    PRESET_COMFORT:  {PRESET_LOW: 20.0, PRESET_HIGH: 23.0},
-    PRESET_BOOST:    {PRESET_LOW: 21.0, PRESET_HIGH: 24.0},
-    PRESET_ACTIVITY: {PRESET_LOW: 19.0, PRESET_HIGH: 24.0},
+    PRESET_COMFORT: {PRESET_LOW: 20.0, PRESET_HIGH: 22.0},
+    PRESET_AWAY:    {PRESET_LOW: 16.0, PRESET_HIGH: 26.0},
+    PRESET_ECO:     {PRESET_LOW: 17.0, PRESET_HIGH: 25.0},
+    PRESET_BOOST:   {PRESET_LOW: 20.5, PRESET_HIGH: 21.5},
+    PRESET_SLEEP:   {PRESET_LOW: 18.0, PRESET_HIGH: 21.0},
 }
 
 # Temperature band selectors operate in °C internally.

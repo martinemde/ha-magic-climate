@@ -97,60 +97,104 @@ async def async_unload_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> boo
 async def async_migrate_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool:
     """Bring an entry forward to the current options schema.
 
-    v1 -> v2 reshapes a free-form list of presets into a standard-preset
-    dict. v2 -> v3 adds the peak-window block, switched off, so an existing
-    entry keeps behaving exactly as it did until peak is configured.
+    v1 -> v2 reshaped a free-form list of presets into a standard-preset
+    dict. v2 -> v3 added the peak-window block. v3 -> v4 is the bigger one:
+    Home stops owning a band and becomes the automatic preset, so its band
+    moves to Comfort, and the schedule gains the Boost preload and the Sleep
+    window. Nothing new is switched on, so an upgraded entry keeps behaving
+    exactly as it did.
     """
     from .const import (
+        CONF_BOOST,
         CONF_ENABLED_PRESETS,
         CONF_PEAK,
         CONF_PRESETS,
+        CONF_SLEEP,
+        CONFIGURABLE_PRESETS,
+        OPTIONAL_PRESETS,
+        PRESET_COMFORT,
         PRESET_DEFAULTS,
         PRESET_HIGH,
+        PRESET_HOME,
         PRESET_LOW,
-        STANDARD_PRESETS,
+        default_boost,
         default_peak,
+        default_sleep,
     )
 
-    if entry.version >= 3:
+    if entry.version >= 4:
         return True
 
-    if entry.version == 2:
-        options = dict(entry.options or {})
-        options.setdefault(CONF_PEAK, default_peak())
-        hass.config_entries.async_update_entry(entry, options=options, version=3)
-        return True
+    options = dict(entry.options or {})
+    if entry.version == 1:
+        options = _reshape_v1_presets(options)
 
-    old_presets = (entry.options or {}).get(CONF_PRESETS, []) or []
-    new_presets: dict[str, dict] = {
-        pid: dict(defaults) for pid, defaults in PRESET_DEFAULTS.items()
-    }
-    enabled: list[str] = []
-    # Carry over any v1 preset whose lowercased name matches a standard one.
-    for raw in old_presets:
-        name = str(raw.get("name", "")).strip().lower()
-        if name in STANDARD_PRESETS:
-            mapped: dict = {
-                PRESET_LOW: float(raw["low"]),
-                PRESET_HIGH: float(raw["high"]),
-            }
-            if raw.get("mode"):
-                mapped["mode"] = raw["mode"]
-            if raw.get("fan"):
-                mapped["fan"] = raw["fan"]
-            new_presets[name] = mapped
-            if name not in enabled:
-                enabled.append(name)
-    if not enabled:
-        from .const import DEFAULT_ENABLED_PRESETS
-        enabled = list(DEFAULT_ENABLED_PRESETS)
+    old_presets = dict(options.get(CONF_PRESETS, {}) or {})
+    old_enabled = list(options.get(CONF_ENABLED_PRESETS, []) or [])
+
+    # Home's band is the user's comfort setting — that is precisely what the
+    # split names it. A pre-existing Comfort band loses: before v4 Comfort
+    # was an ordinary standalone preset nobody in the live install enabled,
+    # and letting it win would silently change what Home applies.
+    if PRESET_HOME in old_presets:
+        old_presets[PRESET_COMFORT] = old_presets[PRESET_HOME]
+
+    presets = {}
+    for pid in CONFIGURABLE_PRESETS:
+        raw = dict(old_presets.get(pid) or PRESET_DEFAULTS[pid])
+        # Presets no longer carry an HVAC mode; fan survives.
+        raw.pop("mode", None)
+        presets[pid] = {
+            PRESET_LOW: raw[PRESET_LOW],
+            PRESET_HIGH: raw[PRESET_HIGH],
+            **({"fan": raw["fan"]} if raw.get("fan") else {}),
+        }
 
     new_options = {
-        CONF_ENABLED_PRESETS: enabled,
-        CONF_PRESETS: new_presets,
-        CONF_PEAK: default_peak(),
+        # Home, Comfort and Away are unconditional now, so only the three
+        # checkbox presets are listed here.
+        CONF_ENABLED_PRESETS: [pid for pid in OPTIONAL_PRESETS if pid in old_enabled],
+        CONF_PRESETS: presets,
+        CONF_PEAK: options.get(CONF_PEAK) or default_peak(),
+        CONF_BOOST: options.get(CONF_BOOST) or default_boost(),
+        # No times: an existing Sleep preset was always selected by hand, and
+        # an upgrade must not start putting the house to bed on a schedule.
+        CONF_SLEEP: options.get(CONF_SLEEP) or default_sleep(),
     }
-    hass.config_entries.async_update_entry(entry, options=new_options, version=3)
+    hass.config_entries.async_update_entry(entry, options=new_options, version=4)
     return True
 
 
+def _reshape_v1_presets(options: dict) -> dict:
+    """Fold a v1 free-form preset list into the standard-preset dict shape.
+
+    Returns a new options dict; the caller writes the entry once, at the
+    current version, rather than migrating it a version at a time.
+    """
+    from .const import (
+        CONF_ENABLED_PRESETS,
+        CONF_PRESETS,
+        PRESET_HIGH,
+        PRESET_LOW,
+        PRESET_ORDER,
+    )
+
+    old_presets = options.get(CONF_PRESETS, []) or []
+    presets: dict[str, dict] = {}
+    enabled: list[str] = []
+    for raw in old_presets:
+        name = str(raw.get("name", "")).strip().lower()
+        if name not in PRESET_ORDER:
+            continue
+        mapped: dict = {PRESET_LOW: float(raw["low"]), PRESET_HIGH: float(raw["high"])}
+        if raw.get("fan"):
+            mapped["fan"] = raw["fan"]
+        presets[name] = mapped
+        if name not in enabled:
+            enabled.append(name)
+
+    return {
+        **options,
+        CONF_PRESETS: presets,
+        CONF_ENABLED_PRESETS: enabled,
+    }

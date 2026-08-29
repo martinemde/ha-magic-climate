@@ -12,13 +12,11 @@ def test_preset_basic_construction():
     assert p.name == "Sleep"
     assert p.low == 16.0
     assert p.high == 21.0
-    assert p.mode is None
     assert p.fan is None
 
 
-def test_preset_with_optional_mode_and_fan():
-    p = Preset(name="Away", low=14.5, high=28.0, mode="heat_cool", fan="auto")
-    assert p.mode == "heat_cool"
+def test_preset_with_optional_fan():
+    p = Preset(name="Away", low=14.5, high=28.0, fan="auto")
     assert p.fan == "auto"
 
 
@@ -55,8 +53,9 @@ def test_compute_service_data_heat_cool():
     }
 
 
-def test_compute_service_data_heat_cool_with_mode_override():
-    p = Preset(name="Away", low=14.5, high=28.0, mode="heat_cool")
+def test_compute_service_data_never_includes_an_hvac_mode():
+    """Presets carry no mode, and the caller pushes none on their behalf."""
+    p = Preset(name="Away", low=14.5, high=28.0)
     data = compute_service_data(p, effective_mode="heat_cool")
     assert "hvac_mode" not in data
     assert data["target_temp_low"] == 14.5
@@ -110,12 +109,11 @@ def test_compute_service_data_unknown_mode_returns_empty():
 
 
 def test_preset_to_dict():
-    p = Preset(name="Sleep", low=16.0, high=21.0, mode="heat_cool", fan="auto")
+    p = Preset(name="Sleep", low=16.0, high=21.0, fan="auto")
     assert p.to_dict() == {
         "name": "Sleep",
         "low": 16.0,
         "high": 21.0,
-        "mode": "heat_cool",
         "fan": "auto",
     }
 
@@ -131,8 +129,13 @@ def test_preset_from_dict():
 
 
 def test_preset_from_dict_with_optionals():
+    p = Preset.from_dict({"name": "Away", "low": 14.5, "high": 28.0, "fan": "auto"})
+    assert p == Preset(name="Away", low=14.5, high=28.0, fan="auto")
+
+
+def test_preset_from_dict_ignores_a_stored_mode():
+    """v3 entries carried one. Reading a stale key must not blow up."""
     p = Preset.from_dict({
-        "name": "Away", "low": 14.5, "high": 28.0,
-        "mode": "heat_cool", "fan": "auto",
+        "name": "Away", "low": 14.5, "high": 28.0, "mode": "heat_cool",
     })
-    assert p == Preset(name="Away", low=14.5, high=28.0, mode="heat_cool", fan="auto")
+    assert p == Preset(name="Away", low=14.5, high=28.0)

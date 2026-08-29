@@ -18,109 +18,100 @@
     "step": {
       "init": {
         "title": "Magic Climate",
-        "menu_options": {
-          "basic": "Basic Options",
-          "comfort": "Home & Eco",
-          "preset_away": "Away Preset",
-          "preset_sleep": "Sleep Preset",
-          "preset_comfort": "Comfort Preset",
-          "preset_boost": "Boost Preset",
-          "preset_activity": "Activity Preset",
-          "save": "Save and exit"
-        }
-      },
-      "basic": {
-        "title": "Basic Options",
-        "description": "Choose which of Home Assistant's standard presets to expose. Eco is turned on from the Home & Eco screen, where the peak settings that depend on it live. This entry wraps {source}; that cannot be changed here — delete the entry and add a new one to wrap a different entity.",
-        "data": {
-          "home": "Home",
-          "away": "Away",
-          "sleep": "Sleep",
-          "comfort": "Comfort",
-          "boost": "Boost",
-          "activity": "Activity"
-        }
-      },
-      "comfort": {
-        "title": "Home & Eco",
-        "description": "Home is the everyday comfort band. Eco is the band used when you want the unit to work less.\n\nTurn on \"Use Eco during peak hours\" and Home will quietly apply the Eco band inside the peak window, then go back to the Home band when peak ends — the preset still reads Home the whole time. Choosing Eco yourself holds Eco until you change it, peak or not.\n\nThe peak window applies every day and may run past midnight. Adjusting the thermostat by hand clears the preset and stops the substitution until you pick a preset again.",
-        "data": {
-          "home_low": "Home — low temperature",
-          "home_high": "Home — high temperature",
-          "home_mode": "Home — HVAC mode",
-          "home_fan": "Home — fan mode",
-          "eco_enabled": "Enable the Eco preset",
-          "eco_low": "Eco — low temperature",
-          "eco_high": "Eco — high temperature",
-          "eco_mode": "Eco — HVAC mode",
-          "eco_fan": "Eco — fan mode",
-          "peak_enabled": "Use Eco during peak hours",
-          "peak_start": "Peak start time",
-          "peak_end": "Peak end time"
-        },
-        "data_description": {
-          "eco_enabled": "Adds Eco to the preset picker. Required for peak substitution.",
-          "home_mode": "Leave unchanged to have the preset not touch the HVAC mode.",
-          "eco_mode": "Leave unchanged to have the preset not touch the HVAC mode.",
-          "peak_end": "An end earlier than the start means the window runs overnight."
-        }
-      },
-      "preset_away": {
-        "title": "Away Preset",
-        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
-        "data": {
-          "low": "Low temperature",
-          "high": "High temperature",
-          "mode": "HVAC mode",
-          "fan": "Fan mode"
-        }
-      },
-      "preset_sleep": {
-        "title": "Sleep Preset",
-        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
-        "data": {
-          "low": "Low temperature",
-          "high": "High temperature",
-          "mode": "HVAC mode",
-          "fan": "Fan mode"
-        }
-      },
-      "preset_comfort": {
-        "title": "Comfort Preset",
-        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
-        "data": {
-          "low": "Low temperature",
-          "high": "High temperature",
-          "mode": "HVAC mode",
-          "fan": "Fan mode"
-        }
-      },
-      "preset_boost": {
-        "title": "Boost Preset",
-        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
-        "data": {
-          "low": "Low temperature",
-          "high": "High temperature",
-          "mode": "HVAC mode",
-          "fan": "Fan mode"
-        }
-      },
-      "preset_activity": {
-        "title": "Activity Preset",
-        "description": "Set the temperature band for this preset. HVAC mode and fan mode are offered as reported by the wrapped climate entity; leave either unchanged to have the preset not touch it.",
-        "data": {
-          "low": "Low temperature",
-          "high": "High temperature",
-          "mode": "HVAC mode",
-          "fan": "Fan mode"
+        "description": "Each preset below is a temperature band, and Home is the one that moves between them.\n\nBy default Home just holds your Comfort band. Switch on Eco and Home splits in two: Comfort outside the peak hours, Eco inside them, swapping on the clock and still reporting Home the whole time. Sleep does the same thing overnight, and Boost runs ahead of peak to pre-heat or pre-cool while power is still cheap.\n\nWhichever way Home is set up, picking any other preset by hand pins that band and holds it until you change it. Leave a window's times blank and its preset is only ever reached that way — created, but never triggered on its own.\n\nThis entry wraps {source}; that cannot be changed here — delete the entry and add a new one to wrap a different entity.",
+        "section": {
+          "comfort": {
+            "name": "Home Comfort",
+            "description": "Your standard setting when you are home and want to be comfortable. Home holds this band unless something below moves it.",
+            "data": {
+              "low": "Low temperature",
+              "high": "High temperature",
+              "fan": "Fan mode"
+            },
+            "data_description": {
+              "fan": "Leave unchanged to have the preset not touch the fan."
+            }
+          },
+          "away": {
+            "name": "Away",
+            "description": "The band to hold when the house is empty. Away has no schedule — you'll need to set up an away trigger in Home Assistant and have it select this preset.",
+            "data": {
+              "low": "Low temperature",
+              "high": "High temperature",
+              "fan": "Fan mode"
+            },
+            "data_description": {
+              "fan": "Leave unchanged to have the preset not touch the fan."
+            }
+          },
+          "eco": {
+            "name": "Eco energy saver",
+            "description": "The band to hold when energy costs more — less comfortable, cheaper to run.",
+            "data": {
+              "enabled": "Create the Eco preset",
+              "auto": "Home switches between Comfort and Eco at peak time",
+              "start": "Peak start",
+              "end": "Peak end",
+              "low": "Low temperature",
+              "high": "High temperature",
+              "fan": "Fan mode"
+            },
+            "data_description": {
+              "auto": "Off means Eco exists but nothing applies it — you pick it yourself.",
+              "start": "Leave both times blank to trigger Eco manually.",
+              "end": "An end earlier than the start means the window runs overnight.",
+              "fan": "Leave unchanged to have the preset not touch the fan."
+            }
+          },
+          "boost": {
+            "name": "Boost",
+            "description": "A band to drive the room past Comfort while power is still cheap, so it coasts through the expensive hours.",
+            "data": {
+              "enabled": "Create the Boost preset",
+              "preload": "Pre-heat or pre-cool before peak starts",
+              "minutes": "Pre-load window",
+              "low": "Low temperature",
+              "high": "High temperature",
+              "fan": "Fan mode"
+            },
+            "data_description": {
+              "preload": "Requires Eco with a peak start time set.",
+              "minutes": "Minutes before peak to start. How long your rooms actually hold their heat is worth measuring; an hour is only a starting point.",
+              "fan": "Leave unchanged to have the preset not touch the fan."
+            }
+          },
+          "sleep": {
+            "name": "Sleep",
+            "description": "The overnight band. Sleep outranks peak: if the two overlap, the room stays comfortable to sleep in rather than saving money.",
+            "data": {
+              "enabled": "Create the Sleep preset",
+              "start": "Sleep start",
+              "end": "Sleep end",
+              "low": "Low temperature",
+              "high": "High temperature",
+              "fan": "Fan mode"
+            },
+            "data_description": {
+              "start": "Leave both times blank to trigger Sleep manually.",
+              "end": "An end earlier than the start means the window runs overnight, which is usually what you want here.",
+              "fan": "Leave unchanged to have the preset not touch the fan."
+            }
+          }
         }
       }
     },
     "error": {
-      "low_not_below_high": "Low temperature must be less than high temperature.",
-      "eco_low_not_below_high": "Eco low temperature must be less than Eco high temperature.",
-      "peak_needs_eco": "Enable the Eco preset before using it during peak hours.",
-      "peak_window_empty": "Peak start and end must differ."
+      "comfort_low_not_below_high": "Comfort low temperature must be less than its high temperature.",
+      "away_low_not_below_high": "Away low temperature must be less than its high temperature.",
+      "eco_low_not_below_high": "Eco low temperature must be less than its high temperature.",
+      "boost_low_not_below_high": "Boost low temperature must be less than its high temperature.",
+      "sleep_low_not_below_high": "Sleep low temperature must be less than its high temperature.",
+      "auto_needs_eco": "Create the Eco preset before having Home switch to it.",
+      "auto_needs_peak_times": "Set a peak start and end before having Home switch at peak time.",
+      "preload_needs_boost": "Create the Boost preset before pre-heating or pre-cooling with it.",
+      "preload_needs_peak": "Pre-loading runs up to peak start, so it needs Home switching at a peak time.",
+      "peak_window_incomplete": "Set both peak times, or leave both blank to trigger Eco manually.",
+      "sleep_window_incomplete": "Set both sleep times, or leave both blank to trigger Sleep manually."
     }
   }
 }

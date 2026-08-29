@@ -34,13 +34,13 @@ from .test_climate_temperature import (
     SOURCE_ENTITY_ID,
     FakeThermostat,
 )
-from .test_peak_substitution import DEFAULT_PRESETS, OFF_PEAK, PEAK_OFF, PEAK_ON
+from .test_schedule_apply import BANDS, MIDDAY, PEAK_OFF, PEAK_ON
 
 RENAMED = "climate.bedroom_heat_pump_v2"
 
 
 async def _setup(
-    hass: HomeAssistant, freezer, *, now: datetime = OFF_PEAK, peak=PEAK_OFF
+    hass: HomeAssistant, freezer, *, now: datetime = MIDDAY, peak=PEAK_OFF
 ) -> tuple[FakeThermostat, MockConfigEntry]:
     hass.config.units = US_CUSTOMARY_SYSTEM
     await hass.config.async_set_time_zone("UTC")
@@ -55,12 +55,12 @@ async def _setup(
 
     entry = MockConfigEntry(
         domain=DOMAIN,
-        version=3,
+        version=4,
         unique_id=f"{DOMAIN}::{SOURCE_ENTITY_ID}",
         data={CONF_SOURCE_ENTITY_ID: SOURCE_ENTITY_ID, CONF_NAME: "Bedroom Magic"},
         options={
-            CONF_ENABLED_PRESETS: ["home", "eco", "sleep"],
-            CONF_PRESETS: DEFAULT_PRESETS,
+            CONF_ENABLED_PRESETS: ["eco"],
+            CONF_PRESETS: BANDS,
             CONF_PEAK: peak,
         },
     )

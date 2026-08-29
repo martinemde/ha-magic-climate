@@ -1,9 +1,9 @@
 """preset_mode survives a Home Assistant restart.
 
 It used to live only in memory: a restart silently dropped it, so the wrapper
-forgot it was holding Home and nothing re-asserted. Peak made that visible —
-restart mid-window and Home kept applying the Home band with no boundary left
-to correct it.
+forgot it was holding Home and nothing re-asserted. The schedule made that
+visible — restart mid-window and Home kept applying the Comfort band with no
+boundary left to correct it.
 
 A restart is simulated the way HA's own tests do it: seed the restore cache
 with the state the entity last published, then set the entry up fresh.
@@ -24,9 +24,11 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from custom_components.magic_climate.const import (
+    CONF_BOOST,
     CONF_ENABLED_PRESETS,
     CONF_PEAK,
     CONF_PRESETS,
+    CONF_SLEEP,
     CONF_SOURCE_ENTITY_ID,
     DOMAIN,
 )
@@ -36,12 +38,14 @@ from .test_climate_temperature import (
     SOURCE_ENTITY_ID,
     FakeThermostat,
 )
-from .test_peak_substitution import (
-    DEFAULT_PRESETS,
+from .test_schedule_apply import (
+    BANDS,
     IN_PEAK,
-    OFF_PEAK,
+    MIDDAY,
     PEAK_OFF,
     PEAK_ON,
+    PRELOAD_OFF,
+    SLEEP_MANUAL,
 )
 
 
@@ -53,6 +57,7 @@ async def _restart(
     restored: dict[str, Any] | None,
     source_band: tuple[float, float],
     peak: dict[str, Any] = PEAK_ON,
+    enabled: list[str] | None = None,
 ) -> FakeThermostat:
     """Bring the wrapper up with `restored` in the restore cache.
 
@@ -79,12 +84,14 @@ async def _restart(
 
     entry = MockConfigEntry(
         domain=DOMAIN,
-        version=3,
+        version=4,
         data={CONF_SOURCE_ENTITY_ID: SOURCE_ENTITY_ID, CONF_NAME: "Bedroom Magic"},
         options={
-            CONF_ENABLED_PRESETS: ["home", "eco", "sleep"],
-            CONF_PRESETS: DEFAULT_PRESETS,
+            CONF_ENABLED_PRESETS: ["eco"] if enabled is None else enabled,
+            CONF_PRESETS: BANDS,
             CONF_PEAK: peak,
+            CONF_BOOST: PRELOAD_OFF,
+            CONF_SLEEP: SLEEP_MANUAL,
         },
     )
     entry.add_to_hass(hass)
@@ -104,7 +111,7 @@ def _pushed(source: FakeThermostat) -> tuple[float, float]:
     )
 
 
-HOME_HELD = {"preset_mode": "home", "effective_preset": "home"}
+HOME_HELD = {"preset_mode": "home", "effective_preset": "comfort"}
 HOME_HELD_AS_ECO = {"preset_mode": "home", "effective_preset": "eco"}
 
 
@@ -113,14 +120,14 @@ HOME_HELD_AS_ECO = {"preset_mode": "home", "effective_preset": "eco"}
 
 async def test_preset_survives_a_restart(hass, freezer) -> None:
     await _restart(
-        hass, freezer, now=OFF_PEAK, restored=HOME_HELD, source_band=(68.0, 76.0)
+        hass, freezer, now=MIDDAY, restored=HOME_HELD, source_band=(68.0, 76.0)
     )
     assert _preset(hass) == "home"
 
 
 async def test_nothing_is_restored_without_a_previous_state(hass, freezer) -> None:
     await _restart(
-        hass, freezer, now=OFF_PEAK, restored=None, source_band=(68.0, 76.0)
+        hass, freezer, now=MIDDAY, restored=None, source_band=(68.0, 76.0)
     )
     assert _preset(hass) is None
 
@@ -128,7 +135,7 @@ async def test_nothing_is_restored_without_a_previous_state(hass, freezer) -> No
 async def test_restore_does_not_push(hass, freezer) -> None:
     """A restart is not a reason to command the hardware."""
     source = await _restart(
-        hass, freezer, now=OFF_PEAK, restored=HOME_HELD, source_band=(68.0, 76.0)
+        hass, freezer, now=MIDDAY, restored=HOME_HELD, source_band=(68.0, 76.0)
     )
     assert _pushed(source) == (68.0, 76.0)
 
@@ -137,7 +144,7 @@ async def test_a_preset_no_longer_enabled_is_not_restored(hass, freezer) -> None
     await _restart(
         hass,
         freezer,
-        now=OFF_PEAK,
+        now=MIDDAY,
         restored={"preset_mode": "boost", "effective_preset": "boost"},
         source_band=(68.0, 76.0),
     )
@@ -153,7 +160,7 @@ async def test_a_setpoint_moved_while_down_clears_the_restored_preset(
     """The label must not outlive the state it describes: if something moved
     the setpoint while HA was down, the preset is gone."""
     source = await _restart(
-        hass, freezer, now=OFF_PEAK, restored=HOME_HELD, source_band=(68.0, 76.0)
+        hass, freezer, now=MIDDAY, restored=HOME_HELD, source_band=(68.0, 76.0)
     )
     await hass.services.async_call(
         "climate", "set_temperature",
@@ -172,7 +179,7 @@ async def test_the_restored_preset_survives_an_echo_of_its_own_band(
 ) -> None:
     """A source re-publishing the values it already holds is not drift."""
     source = await _restart(
-        hass, freezer, now=OFF_PEAK, restored=HOME_HELD, source_band=(68.0, 76.0)
+        hass, freezer, now=MIDDAY, restored=HOME_HELD, source_band=(68.0, 76.0)
     )
     source.async_write_ha_state()
     await hass.async_block_till_done()
@@ -195,7 +202,7 @@ async def test_a_peak_boundary_crossed_while_down_is_re_applied(
     assert _preset(hass) == "home"
 
 
-async def test_peak_ending_while_down_restores_the_home_band(hass, freezer) -> None:
+async def test_peak_ending_while_down_restores_the_comfort_band(hass, freezer) -> None:
     source = await _restart(
         hass,
         freezer,
@@ -215,15 +222,17 @@ async def test_no_re_apply_when_the_window_did_not_move(hass, freezer) -> None:
     assert _pushed(source) == (62.0, 82.0)
 
 
-async def test_no_re_apply_for_a_preset_peak_does_not_touch(hass, freezer) -> None:
+async def test_no_re_apply_for_a_pinned_preset(hass, freezer) -> None:
+    """A pinned band is not on the schedule, so no boundary can have moved it."""
     source = await _restart(
         hass,
         freezer,
         now=IN_PEAK,
         restored={"preset_mode": "sleep", "effective_preset": "sleep"},
-        source_band=(64.0, 72.0),
+        source_band=(64.0, 70.0),
+        enabled=["eco", "sleep"],
     )
-    assert _pushed(source) == (64.0, 72.0)
+    assert _pushed(source) == (64.0, 70.0)
     assert _preset(hass) == "sleep"
 
 

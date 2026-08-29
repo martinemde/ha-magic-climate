@@ -11,10 +11,13 @@ class PresetValidationError(ValueError):
 
 @dataclass
 class Preset:
-    """A named comfort profile.
+    """A named comfort profile: a temperature band, and optionally a fan speed.
 
-    A preset always declares a low/high temperature band. Mode and fan are
-    optional — when set, they are pushed to the source before the temps.
+    A preset does not carry an HVAC mode. Heating or cooling is a seasonal
+    decision made once for the whole unit, not something a comfort band should
+    flip on the way past — a Sleep preset that forced `heat` would fight the
+    house in August. The band is applied through whatever mode the unit is
+    already in.
 
     Construction does not validate. Call `validate()` at trust boundaries
     (loading from config storage, options-flow submit).
@@ -23,7 +26,6 @@ class Preset:
     name: str
     low: float
     high: float
-    mode: Optional[str] = None
     fan: Optional[str] = None
 
     def validate(self) -> None:
@@ -34,8 +36,6 @@ class Preset:
 
     def to_dict(self) -> dict:
         d: dict = {"name": self.name, "low": self.low, "high": self.high}
-        if self.mode is not None:
-            d["mode"] = self.mode
         if self.fan is not None:
             d["fan"] = self.fan
         return d
@@ -46,7 +46,6 @@ class Preset:
             name=data["name"],
             low=float(data["low"]),
             high=float(data["high"]),
-            mode=data.get("mode"),
             fan=data.get("fan"),
         )
 
@@ -64,12 +63,9 @@ MODE_OFF = "off"
 def compute_service_data(preset: Preset, effective_mode: str) -> dict:
     """Translate a preset's low/high into source service-call kwargs.
 
-    Returns the kwargs for the climate.set_temperature service. Does NOT
-    include hvac_mode — the caller is responsible for issuing
-    set_hvac_mode separately when the preset overrides the mode.
-
-    Returns an empty dict for modes that don't accept a temperature
-    (FAN_ONLY, OFF).
+    `effective_mode` is the mode the source is already in — presets never
+    change it. Returns the kwargs for climate.set_temperature, or an empty
+    dict for modes that don't accept a temperature (FAN_ONLY, OFF).
     """
     if effective_mode == MODE_HEAT_COOL:
         return {

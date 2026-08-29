@@ -10,30 +10,40 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_BOOST,
     CONF_ENABLED_PRESETS,
     CONF_PEAK,
     CONF_PRESETS,
+    CONF_SLEEP,
     CONF_SOURCE_ENTITY_ID,
-    DEFAULT_ENABLED_PRESETS,
     DOMAIN,
     PRESET_DEFAULTS,
+    default_boost,
     default_peak,
+    default_sleep,
 )
 
 
 def initial_options() -> dict[str, Any]:
-    """Default options for a freshly created entry."""
+    """Default options for a freshly created entry.
+
+    Nothing optional is switched on and nothing is scheduled, so a new entry
+    is an ordinary thermostat with a Home band and an Away band until someone
+    opens the options and asks for more.
+    """
     return {
-        CONF_ENABLED_PRESETS: list(DEFAULT_ENABLED_PRESETS),
+        CONF_ENABLED_PRESETS: [],
         CONF_PRESETS: {pid: dict(defaults) for pid, defaults in PRESET_DEFAULTS.items()},
         CONF_PEAK: default_peak(),
+        CONF_BOOST: default_boost(),
+        CONF_SLEEP: default_sleep(),
     }
 
 
 class MagicClimateConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Initial setup: pick a source climate entity and a display name."""
 
-    VERSION = 3
+    VERSION = 4
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
