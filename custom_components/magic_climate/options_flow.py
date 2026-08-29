@@ -217,7 +217,6 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
         return vol.Schema(
             {
                 vol.Required(PRESET_COMFORT): _open(band(PRESET_COMFORT)),
-                vol.Required(PRESET_AWAY): _open(band(PRESET_AWAY)),
                 vol.Required(PRESET_ECO): _open(
                     {
                         **check(_ENABLED, PRESET_ECO in enabled),
@@ -253,6 +252,9 @@ class MagicClimateOptionsFlow(config_entries.OptionsFlow):
                         **band(PRESET_SLEEP),
                     }
                 ),
+                # Away sits last: it is the only band Home never moves
+                # through, so it has nothing to be compared against.
+                vol.Required(PRESET_AWAY): _open(band(PRESET_AWAY)),
             }
         )
 

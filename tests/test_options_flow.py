@@ -183,10 +183,10 @@ async def test_every_preset_gets_a_section(hass: HomeAssistant) -> None:
     result = await _open(hass, entry)
     assert [str(k) for k in result["data_schema"].schema] == [
         "comfort",
-        "away",
         "eco",
         "boost",
         "sleep",
+        "away",
     ]
 
 

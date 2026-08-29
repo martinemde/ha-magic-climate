@@ -18,23 +18,11 @@
     "step": {
       "init": {
         "title": "Magic Climate",
-        "description": "Each preset below is a temperature band, and Home is the one that moves between them.\n\nBy default Home just holds your Comfort band. Switch on Eco and Home splits in two: Comfort outside the peak hours, Eco inside them, swapping on the clock and still reporting Home the whole time. Sleep does the same thing overnight, and Boost runs ahead of peak to pre-heat or pre-cool while power is still cheap.\n\nWhichever way Home is set up, picking any other preset by hand pins that band and holds it until you change it. Leave a window's times blank and its preset is only ever reached that way — created, but never triggered on its own.\n\nThis entry wraps {source}; that cannot be changed here — delete the entry and add a new one to wrap a different entity.",
-        "section": {
+        "description": "Each section below is a preset. By default only Home and Away are enabled.\n\nHome is the initial comfort setting, the temp band you want as your default. If you enable Eco, Home will automatically switch to Eco during peak, while your climate control will preserve the Home preset. Adding additional settings allows Home to gain smarter behaviors that layer on at different times while keeping your climate control as a simple Home/Away preset.\n\nEach new preset you add will also create a separate setting that allows you to manually select that preset. Enabling Eco also adds a Comfort setting. Selecting any preset pins that preset until you or an automation changes it. Leave a window's times blank and its preset is only ever reached manually, never triggered on its own.\n\nThis entry wraps {source}. Delete the entry and add a new one to wrap a different entity.",
+        "sections": {
           "comfort": {
-            "name": "Home Comfort",
-            "description": "Your standard setting when you are home and want to be comfortable. Home holds this band unless something below moves it.",
-            "data": {
-              "low": "Low temperature",
-              "high": "High temperature",
-              "fan": "Fan mode"
-            },
-            "data_description": {
-              "fan": "Leave unchanged to have the preset not touch the fan."
-            }
-          },
-          "away": {
-            "name": "Away",
-            "description": "The band to hold when the house is empty. Away has no schedule — you'll need to set up an away trigger in Home Assistant and have it select this preset.",
+            "name": "Home (Comfort)",
+            "description": "Your standard Comfort setting. Home holds this band unless another preset overrides it.",
             "data": {
               "low": "Low temperature",
               "high": "High temperature",
@@ -46,10 +34,10 @@
           },
           "eco": {
             "name": "Eco energy saver",
-            "description": "The band to hold when energy costs more — less comfortable, cheaper to run.",
+            "description": "The band to hold when energy costs more.",
             "data": {
               "enabled": "Create the Eco preset",
-              "auto": "Home switches between Comfort and Eco at peak time",
+              "auto": "Home switches from Comfort to Eco at peak time",
               "start": "Peak start",
               "end": "Peak end",
               "low": "Low temperature",
@@ -57,7 +45,7 @@
               "fan": "Fan mode"
             },
             "data_description": {
-              "auto": "Off means Eco exists but nothing applies it — you pick it yourself.",
+              "auto": "Off means Eco is available for manual selection.",
               "start": "Leave both times blank to trigger Eco manually.",
               "end": "An end earlier than the start means the window runs overnight.",
               "fan": "Leave unchanged to have the preset not touch the fan."
@@ -65,7 +53,7 @@
           },
           "boost": {
             "name": "Boost",
-            "description": "A band to drive the room past Comfort while power is still cheap, so it coasts through the expensive hours.",
+            "description": "A band to drive the room past Comfort while power is still cheap and coast through the expensive hours.",
             "data": {
               "enabled": "Create the Boost preset",
               "preload": "Pre-heat or pre-cool before peak starts",
@@ -76,13 +64,13 @@
             },
             "data_description": {
               "preload": "Requires Eco with a peak start time set.",
-              "minutes": "Minutes before peak to start. How long your rooms actually hold their heat is worth measuring; an hour is only a starting point.",
+              "minutes": "Minutes before peak to start. Many units need longer than an hour and may not actually save any money in a leaky house.",
               "fan": "Leave unchanged to have the preset not touch the fan."
             }
           },
           "sleep": {
             "name": "Sleep",
-            "description": "The overnight band. Sleep outranks peak: if the two overlap, the room stays comfortable to sleep in rather than saving money.",
+            "description": "The overnight band. Sleep will supersede peak.",
             "data": {
               "enabled": "Create the Sleep preset",
               "start": "Sleep start",
@@ -94,6 +82,18 @@
             "data_description": {
               "start": "Leave both times blank to trigger Sleep manually.",
               "end": "An end earlier than the start means the window runs overnight, which is usually what you want here.",
+              "fan": "Leave unchanged to have the preset not touch the fan."
+            }
+          },
+          "away": {
+            "name": "Away",
+            "description": "The band to hold when the house is empty. Away has no schedule. You'll need to set up an away trigger in Home Assistant and have it select this preset.",
+            "data": {
+              "low": "Low temperature",
+              "high": "High temperature",
+              "fan": "Fan mode"
+            },
+            "data_description": {
               "fan": "Leave unchanged to have the preset not touch the fan."
             }
           }

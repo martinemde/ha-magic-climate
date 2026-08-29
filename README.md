@@ -35,11 +35,11 @@ that, and Sleep is Comfort with nobody watching.
 
 | Section | What it is |
 |---|---|
-| **Home Comfort** | Your standard band. Home holds it unless something below moves it. |
-| **Away** | The band for an empty house. No schedule — wire an away trigger in HA to select it. |
+| **Home (Comfort)** | Your standard band. Home holds it unless something below moves it. |
 | **Eco energy saver** | The band for when energy costs more, plus the peak window and the switch that has Home swap into it. |
 | **Boost** | A band that drives the room past Comfort while power is cheap, plus how many minutes before peak to start. |
 | **Sleep** | The overnight band and its window. |
+| **Away** | The band for an empty house. No schedule — wire an away trigger in HA to select it. |
 
 Each band is a low, a high, and an optional fan mode taken from what the wrapped
 entity reports in `fan_modes`. Presets carry no HVAC mode: heating or cooling is
