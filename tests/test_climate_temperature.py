@@ -37,6 +37,7 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceNotSupported
 from homeassistant.setup import async_setup_component
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 from pytest_homeassistant_custom_component.common import (
@@ -72,6 +73,7 @@ class FakeThermostat(ClimateEntity):
         HVACMode.HEAT_COOL,
         HVACMode.AUTO,
         HVACMode.DRY,
+        HVACMode.FAN_ONLY,
     ]
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
 
@@ -214,21 +216,125 @@ async def test_features_range_in_off_mode(hass: HomeAssistant) -> None:
 # --- Manual writes: reshape single setpoint to the source's range -----------
 
 
-async def test_cool_mode_set_moves_high_preserves_low(hass: HomeAssistant) -> None:
+async def test_cool_mode_set_moves_high(hass: HomeAssistant) -> None:
     """The original bug: a single ``temperature`` write in cool mode must land
-    on the source's high edge and leave the low edge untouched."""
+    on the source's high edge."""
     source = await _setup(hass)  # cool, low=70, high=82 °F
     await _set_temp(hass, temperature=75.0)
     assert source.target_temperature_high == pytest.approx(75.0, abs=0.5)
-    assert source.target_temperature_low == pytest.approx(70.0, abs=0.5)
     assert _magic(hass).attributes[ATTR_TEMPERATURE] == pytest.approx(75.0, abs=0.5)
 
 
-async def test_heat_mode_set_moves_low_preserves_high(hass: HomeAssistant) -> None:
+async def test_cool_mode_slides_low_out_of_the_way(hass: HomeAssistant) -> None:
+    """A heating bound parked under the cooling one makes the unit clamp.
+
+    The source starts at 70/82. Cooling to 75 leaves only 5 °F of band, under
+    the 4 °C (7.2 °F) minimum, so the low edge has to come down with it.
+    """
+    source = await _setup(hass)
+    await _set_temp(hass, temperature=75.0)
+    assert source.target_temperature_high == pytest.approx(75.0, abs=0.5)
+    assert source.target_temperature_low == pytest.approx(75.0 - 7.2, abs=0.5)
+
+
+async def test_cool_mode_leaves_a_wide_band_alone(hass: HomeAssistant) -> None:
+    """Only ever slide *toward* the minimum — a wider band is the user's."""
+    source = await _setup(hass)
+    await _set_temp(hass, temperature=80.0)  # 80 - 70 = 10 °F, already wide
+    assert source.target_temperature_high == pytest.approx(80.0, abs=0.5)
+    assert source.target_temperature_low == pytest.approx(70.0, abs=0.5)
+
+
+async def test_cool_mode_accepts_a_narrow_band_at_the_source_floor(
+    hass: HomeAssistant,
+) -> None:
+    """The slide stops at the source's min_temp, even if that costs the span.
+
+    Cooling to 64 wants the low edge at 56.8, below the source's 61 °F floor.
+    Pushing it there makes HA reject the whole call, so the cooling setpoint
+    the user asked for would be lost too. Clamp and accept the narrow band.
+    """
+    source = await _setup(hass)
+    await _set_temp(hass, temperature=64.0)
+    assert source.target_temperature_high == pytest.approx(64.0, abs=0.5)
+    assert source.target_temperature_low == pytest.approx(61.0, abs=0.5)
+
+
+async def test_heat_mode_accepts_a_narrow_band_at_the_source_ceiling(
+    hass: HomeAssistant,
+) -> None:
+    """Mirror: the high edge stops at the source's max_temp of 90 °F."""
+    source = await _setup(hass)
+    await _set_mode(hass, "heat")
+    await _set_temp(hass, temperature=86.0)
+    assert source.target_temperature_low == pytest.approx(86.0, abs=0.5)
+    assert source.target_temperature_high == pytest.approx(90.0, abs=0.5)
+
+
+async def test_heat_to_80_against_the_real_ceiling(hass: HomeAssistant) -> None:
+    """The live case: the units cap at 28 °C (82.4 °F) per their ESPHome
+    ``visual: max_temperature``. Heating to 80 wants the cooling edge at
+    87.2, so there is nowhere for it to go — leave the two close together
+    rather than dropping the write."""
+    source = await _setup(hass)
+    source._attr_max_temp = 82.4
+    source.async_write_ha_state()
+    await hass.async_block_till_done()
+    await _set_mode(hass, "heat")
+    await _set_temp(hass, temperature=80.0)
+    assert source.target_temperature_low == pytest.approx(80.0, abs=0.5)
+    assert source.target_temperature_high == pytest.approx(82.4, abs=0.5)
+
+
+async def test_heat_mode_set_moves_low(hass: HomeAssistant) -> None:
     source = await _setup(hass)
     await _set_mode(hass, "heat")
     await _set_temp(hass, temperature=68.0)
     assert source.target_temperature_low == pytest.approx(68.0, abs=0.5)
+    # 82 is already more than 7.2 °F above 68, so it stays put.
+    assert source.target_temperature_high == pytest.approx(82.0, abs=0.5)
+
+
+async def test_heat_mode_slides_high_out_of_the_way(hass: HomeAssistant) -> None:
+    """Mirror of the cooling case: heating up to meet the cooling bound."""
+    source = await _setup(hass)
+    await _set_mode(hass, "heat")
+    await _set_temp(hass, temperature=80.0)  # 82 - 80 = 2 °F, far too narrow
+    assert source.target_temperature_low == pytest.approx(80.0, abs=0.5)
+    assert source.target_temperature_high == pytest.approx(80.0 + 7.2, abs=0.5)
+
+
+# --- fan_only has no setpoint ----------------------------------------------
+
+
+async def test_fan_only_reports_no_setpoint(hass: HomeAssistant) -> None:
+    """The band midpoint is fiction in fan_only, and it was being published."""
+    await _setup(hass)
+    await _set_mode(hass, "fan_only")
+    assert _magic(hass).attributes.get(ATTR_TEMPERATURE) is None
+
+
+async def test_fan_only_advertises_no_temperature_control(
+    hass: HomeAssistant,
+) -> None:
+    await _setup(hass)
+    await _set_mode(hass, "fan_only")
+    feats = _magic(hass).attributes["supported_features"]
+    assert not (feats & ClimateEntityFeature.TARGET_TEMPERATURE)
+    assert not (feats & ClimateEntityFeature.TARGET_TEMPERATURE_RANGE)
+
+
+async def test_fan_only_write_does_not_touch_the_band(hass: HomeAssistant) -> None:
+    """Nudging a fan-mode setpoint is what parked the bound in the first place.
+
+    Dropping the feature flag makes Home Assistant refuse the call before it
+    reaches the entity, so the band cannot be written by accident at all.
+    """
+    source = await _setup(hass)
+    await _set_mode(hass, "fan_only")
+    with pytest.raises(ServiceNotSupported):
+        await _set_temp(hass, temperature=72.0)
+    assert source.target_temperature_low == pytest.approx(70.0, abs=0.5)
     assert source.target_temperature_high == pytest.approx(82.0, abs=0.5)
 
 

@@ -39,6 +39,7 @@ from .const import (
     DEFAULT_PRELOAD_MINUTES,
     DOMAIN,
     DRIFT_TOLERANCE,
+    MIN_SETPOINT_SPAN_C,
     OPTIONAL_PRESETS,
     PEAK_ENABLED,
     PRESET_BOOST,
@@ -482,6 +483,35 @@ class MagicClimate(ClimateEntity, RestoreEntity):
             return val * 9.0 / 5.0 + 32.0
         return val
 
+    def _clamp_to_source_limits(self, val: float) -> float:
+        """Hold `val` inside the source's own min/max, in the source's unit.
+
+        A slid bound that lands outside them makes Home Assistant reject the
+        whole set_temperature call, so the setpoint the user actually asked
+        for would not be applied either. Better a deadband narrower than
+        MIN_SETPOINT_SPAN_C than no write at all.
+        """
+        attrs = self._source_state.attributes if self._source_state else {}
+        low_limit = attrs.get("min_temp")
+        high_limit = attrs.get("max_temp")
+        if low_limit is not None:
+            val = max(val, low_limit)
+        if high_limit is not None:
+            val = min(val, high_limit)
+        return val
+
+    def _denormalize_span(self, val: float) -> float:
+        """Convert a °C *interval* into the source unit.
+
+        A span is a difference, not a reading, so it scales without the
+        freezing-point offset. Getting this wrong is silent: 4.0 would pass
+        through as 4 °F on a Fahrenheit install, a little over half the
+        intended gap.
+        """
+        if self._source_unit == UnitOfTemperature.FAHRENHEIT:
+            return val * 9.0 / 5.0
+        return val
+
     @property
     def current_temperature(self) -> float | None:
         if not self._source_state:
@@ -491,6 +521,12 @@ class MagicClimate(ClimateEntity, RestoreEntity):
     @property
     def target_temperature(self) -> float | None:
         if not self._source_state:
+            return None
+        # fan_only moves air and heats nothing. The source still holds a band
+        # because it is two-point internally, but neither side drives anything,
+        # so any number here is fiction — and a fiction the user can nudge,
+        # which writes a real bound. Report nothing.
+        if self.hvac_mode == HVACMode.FAN_ONLY:
             return None
         attrs = self._source_state.attributes
         val = attrs.get("temperature")
@@ -625,6 +661,13 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         # Drop both temperature flags and decide fresh.
         features = source_features & ~ClimateEntityFeature.TARGET_TEMPERATURE
         features = features & ~ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+
+        # fan_only drives no setpoint, so offering a control to change one
+        # only lets the user park a bound that blocks heat or cool later.
+        if self.hvac_mode == HVACMode.FAN_ONLY:
+            if self._presets:
+                features |= ClimateEntityFeature.PRESET_MODE
+            return ClimateEntityFeature(features)
 
         source_supports_dual = bool(
             source_features & ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
@@ -776,6 +819,12 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
+        if self.hvac_mode == HVACMode.FAN_ONLY and "hvac_mode" not in kwargs:
+            _LOGGER.debug(
+                "Ignoring setpoint write on %s: fan_only drives no setpoint",
+                self._source_entity_id,
+            )
+            return
         data: dict[str, Any] = {"entity_id": self._source_entity_id}
         for key in ("temperature", "target_temp_low", "target_temp_high"):
             if key in kwargs:
@@ -792,8 +841,8 @@ class MagicClimate(ClimateEntity, RestoreEntity):
 
         Mirrors `_adapt_temp_kwargs_to_source` but for ad-hoc UI tweaks: when
         the user nudges the wrapper's setpoint in a single-setpoint mode and
-        the source only accepts range, set just the side that drives the
-        current mode and preserve the other side from source state.
+        the source only accepts range, set the side that drives the current
+        mode and push the other side out to MIN_SETPOINT_SPAN_C.
         """
         if not self._source_state:
             return
@@ -806,26 +855,40 @@ class MagicClimate(ClimateEntity, RestoreEntity):
             attrs = self._source_state.attributes
             cur_low = attrs.get("target_temp_low")
             cur_high = attrs.get("target_temp_high")
+            min_span = self._denormalize_span(MIN_SETPOINT_SPAN_C)
             mode = self.hvac_mode
             if mode in (HVACMode.COOL, HVACMode.DRY):
-                data["target_temp_low"] = cur_low if cur_low is not None else target
+                # Cooling drives the high bound. Preserving the low bound
+                # verbatim is what parks the heating setpoint against the
+                # cooling one until the unit refuses to go lower, so pull it
+                # down far enough to stay out of the way. Only ever down: a
+                # band already wider than the minimum is the user's choice.
                 data["target_temp_high"] = target
+                floor = target - min_span
+                data["target_temp_low"] = self._clamp_to_source_limits(
+                    min(cur_low, floor) if cur_low is not None else floor
+                )
             elif mode == HVACMode.AUTO:
                 # Source averages low/high in AUTO; center a band on the new
                 # target so the displayed midpoint equals what the user set.
-                span = 4.0
+                span = min_span
                 if (
                     cur_low is not None
                     and cur_high is not None
                     and cur_high > cur_low
                 ):
-                    span = cur_high - cur_low
+                    span = max(cur_high - cur_low, min_span)
                 half = span / 2.0
-                data["target_temp_low"] = target - half
-                data["target_temp_high"] = target + half
+                data["target_temp_low"] = self._clamp_to_source_limits(target - half)
+                data["target_temp_high"] = self._clamp_to_source_limits(target + half)
             else:
+                # Heating drives the low bound; the cooling bound gets the
+                # same treatment in reverse.
                 data["target_temp_low"] = target
-                data["target_temp_high"] = cur_high if cur_high is not None else target
+                ceiling = target + min_span
+                data["target_temp_high"] = self._clamp_to_source_limits(
+                    max(cur_high, ceiling) if cur_high is not None else ceiling
+                )
         elif (
             ("target_temp_low" in data or "target_temp_high" in data)
             and not supports_range

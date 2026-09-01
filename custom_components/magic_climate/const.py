@@ -112,6 +112,12 @@ TEMP_MIN_C = 5.0
 TEMP_MAX_C = 35.0
 TEMP_STEP_C = 0.5
 
+# Minimum gap the source must keep between its heating and cooling setpoints.
+# The wrapped unit is always two-point internally, so a bound left parked next
+# to the one being set makes the unit clamp. 4 °C matches the amplitude the
+# CN105 firmware enforces for itself in AUTO (climateControls.cpp).
+MIN_SETPOINT_SPAN_C = 4.0
+
 # Drift detection tolerance in °C
 DRIFT_TOLERANCE = 0.1
 
