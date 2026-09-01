@@ -127,7 +127,36 @@ the recorder.
 
 If the source's `supported_features` includes both `TARGET_TEMPERATURE_RANGE` and `HEAT_COOL` in `hvac_modes`, the wrapper masks `TARGET_TEMPERATURE_RANGE` out in modes other than `HEAT_COOL` (and `OFF` for entities that idle from `HEAT_COOL`). The thermostat card renders the right number of sliders for each mode.
 
+In `FAN_ONLY` the wrapper masks out both temperature flags and reports no
+setpoint at all. The source still holds a band, because it stays two-point
+internally, but neither side drives anything in that mode — so any number
+shown there is fiction, and a fiction the user can nudge, which writes a real
+bound. Dropping the flags makes Home Assistant refuse the write before it
+reaches the entity.
+
 Otherwise the wrapper does pure pass-through.
+
+## Minimum setpoint span
+
+The wrapped unit is two-point internally even while the wrapper presents one
+slider, so the bound you are *not* setting still matters: left parked next to
+the one you are setting, it makes the unit clamp, and the setpoint echoes back
+a degree off what you asked for.
+
+So a manual write slides the other bound out of the way, keeping at least
+`MIN_SETPOINT_SPAN_C` (4 °C, matching the amplitude the CN105 firmware enforces
+for itself in AUTO). Cooling pulls the heating bound down; heating pushes the
+cooling bound up. Two limits on that:
+
+- It slides only *toward* the minimum. A band already wider is left alone —
+  that is the user's choice, not something to normalise.
+- It stops at the source's own `min_temp`/`max_temp`. A bound pushed outside
+  them makes Home Assistant reject the whole call, which would lose the
+  setpoint that was actually asked for, so a narrower deadband is the better
+  trade.
+
+Presets are exempt: a preset names both edges deliberately, so its span is
+whatever it was configured to be.
 
 ## License
 
