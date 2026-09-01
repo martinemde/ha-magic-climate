@@ -1,7 +1,7 @@
 {
   "domain": "magic_climate",
   "name": "Magic Climate",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "documentation": "https://github.com/martinemde/ha-magic-climate",
   "issue_tracker": "https://github.com/martinemde/ha-magic-climate/issues",
   "codeowners": ["@martinemde"],
