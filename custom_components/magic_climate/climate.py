@@ -62,6 +62,12 @@ from .schedule import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Modes where no setpoint is acting. The source still holds a band — it is
+# pinned two-point internally — but nothing in it drives the compressor, so
+# any number reported here is fiction, and a fiction the user can nudge,
+# which writes a real bound that heat or cool then inherits.
+NO_SETPOINT_MODES = (HVACMode.FAN_ONLY, HVACMode.OFF)
+
 
 def _load_presets(entry: ConfigEntry) -> dict[str, Preset]:
     """The bands this entry offers, keyed by preset id.
@@ -522,11 +528,9 @@ class MagicClimate(ClimateEntity, RestoreEntity):
     def target_temperature(self) -> float | None:
         if not self._source_state:
             return None
-        # fan_only moves air and heats nothing. The source still holds a band
-        # because it is two-point internally, but neither side drives anything,
-        # so any number here is fiction — and a fiction the user can nudge,
-        # which writes a real bound. Report nothing.
-        if self.hvac_mode == HVACMode.FAN_ONLY:
+        # fan_only moves air and heats nothing; off does not even do that.
+        # Report nothing rather than a bound that isn't acting.
+        if self.hvac_mode in NO_SETPOINT_MODES:
             return None
         attrs = self._source_state.attributes
         val = attrs.get("temperature")
@@ -548,15 +552,15 @@ class MagicClimate(ClimateEntity, RestoreEntity):
 
     @property
     def target_temperature_low(self) -> float | None:
-        if self._source_state:
-            return self._normalize_temp(self._source_state.attributes.get("target_temp_low"))
-        return None
+        if not self._source_state or self.hvac_mode in NO_SETPOINT_MODES:
+            return None
+        return self._normalize_temp(self._source_state.attributes.get("target_temp_low"))
 
     @property
     def target_temperature_high(self) -> float | None:
-        if self._source_state:
-            return self._normalize_temp(self._source_state.attributes.get("target_temp_high"))
-        return None
+        if not self._source_state or self.hvac_mode in NO_SETPOINT_MODES:
+            return None
+        return self._normalize_temp(self._source_state.attributes.get("target_temp_high"))
 
     @property
     def min_temp(self) -> float:
@@ -662,9 +666,9 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         features = source_features & ~ClimateEntityFeature.TARGET_TEMPERATURE
         features = features & ~ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
 
-        # fan_only drives no setpoint, so offering a control to change one
-        # only lets the user park a bound that blocks heat or cool later.
-        if self.hvac_mode == HVACMode.FAN_ONLY:
+        # fan_only and off drive no setpoint, so offering a control to change
+        # one only lets the user park a bound that blocks heat or cool later.
+        if self.hvac_mode in NO_SETPOINT_MODES:
             if self._presets:
                 features |= ClimateEntityFeature.PRESET_MODE
             return ClimateEntityFeature(features)
@@ -673,10 +677,7 @@ class MagicClimate(ClimateEntity, RestoreEntity):
             source_features & ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
         ) and HVACMode.HEAT_COOL in self.hvac_modes
 
-        if source_supports_dual and (
-            self.hvac_mode == HVACMode.HEAT_COOL
-            or (self.hvac_mode == HVACMode.OFF and HVACMode.HEAT_COOL in self.hvac_modes)
-        ):
+        if source_supports_dual and self.hvac_mode == HVACMode.HEAT_COOL:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
         else:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE
@@ -819,10 +820,11 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        if self.hvac_mode == HVACMode.FAN_ONLY and "hvac_mode" not in kwargs:
+        if self.hvac_mode in NO_SETPOINT_MODES and "hvac_mode" not in kwargs:
             _LOGGER.debug(
-                "Ignoring setpoint write on %s: fan_only drives no setpoint",
+                "Ignoring setpoint write on %s: %s drives no setpoint",
                 self._source_entity_id,
+                self.hvac_mode,
             )
             return
         data: dict[str, Any] = {"entity_id": self._source_entity_id}

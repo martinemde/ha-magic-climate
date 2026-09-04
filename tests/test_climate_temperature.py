@@ -203,14 +203,37 @@ async def test_features_range_in_heat_cool_mode(hass: HomeAssistant) -> None:
     assert not (feats & ClimateEntityFeature.TARGET_TEMPERATURE)
 
 
-async def test_features_range_in_off_mode(hass: HomeAssistant) -> None:
-    """Off mode advertises the range, because heat_cool is the resting mode a
-    dual-setpoint source returns to."""
+async def test_features_none_in_off_mode(hass: HomeAssistant) -> None:
+    """Off drives no setpoint, so it advertises neither — same as fan_only.
+
+    The band the source still holds is not acting on anything, and showing it
+    invites a nudge that parks a bound heat or cool then inherits.
+    """
     await _setup(hass)
     await _set_mode(hass, "off")
     feats = _magic(hass).attributes["supported_features"]
-    assert feats & ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+    assert not (feats & ClimateEntityFeature.TARGET_TEMPERATURE_RANGE)
     assert not (feats & ClimateEntityFeature.TARGET_TEMPERATURE)
+
+
+async def test_off_reports_no_setpoint(hass: HomeAssistant) -> None:
+    """No single setpoint and no band edges while off."""
+    await _setup(hass)
+    await _set_mode(hass, "off")
+    attrs = _magic(hass).attributes
+    assert attrs.get(ATTR_TEMPERATURE) is None
+    assert attrs.get("target_temp_low") is None
+    assert attrs.get("target_temp_high") is None
+
+
+async def test_off_write_does_not_touch_the_band(hass: HomeAssistant) -> None:
+    """The band survives off untouched, ready for the next heat or cool."""
+    source = await _setup(hass)
+    await _set_mode(hass, "off")
+    with pytest.raises(ServiceNotSupported):
+        await _set_temp(hass, temperature=72.0)
+    assert source.target_temperature_low == pytest.approx(70.0, abs=0.5)
+    assert source.target_temperature_high == pytest.approx(82.0, abs=0.5)
 
 
 # --- Manual writes: reshape single setpoint to the source's range -----------
