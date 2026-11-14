@@ -80,6 +80,9 @@ def _async_track_source_rename(hass: "HomeAssistant", entry: "ConfigEntry") -> N
 
 async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool:
     """Set up Magic Climate from a config entry."""
+    from .diagnostics import DiagnosticsHistory
+
+    entry.runtime_data = DiagnosticsHistory()
     _async_track_source_rename(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, _platforms())
     # Options changes are handled in place by the climate entity itself —

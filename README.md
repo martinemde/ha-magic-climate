@@ -110,6 +110,39 @@ was down, the preset clears on the first source update, exactly as it would have
 without the restart. The one exception is a window boundary crossed while HA was
 down, which has no boundary left to fire and is re-applied at startup.
 
+## Failures and recovery
+
+If the source is unavailable when Home crosses a schedule boundary, the wrapper
+waits. On reconnection it compares the source with the last band it sent. If
+nothing changed, it applies the band the clock calls for now, once. It does not
+replay missed windows. If a wall thermostat or another controller changed a
+setpoint or a declared fan setting, it clears the preset instead: manual control
+wins. An outage with no schedule change causes no writes.
+
+Restart recovery uses the same check against the previously applied band. Editing
+options cancels deferred schedule work and never commands hardware.
+
+A preset can require both a temperature command and a fan command. If either
+fails, the wrapper clears the preset rather than claiming it fully applied. It
+does not undo commands that already succeeded or retry continuously. A manual
+request reports the error to its caller; an automatic request logs a warning.
+Select a preset again when ready.
+
+## Diagnostics
+
+The integration's **Download diagnostics** action includes its preset/schedule
+settings, relevant source and wrapper climate state, and the last 20 decision
+records. Records explain preset selections, schedule deferrals/recovery, sent
+commands, failures, and the expected/reported values that cleared a preset.
+Each temperature payload includes its unit. A sent command records a Home
+Assistant service request, not proof that physical hardware accepted it.
+
+History is kept only in memory and resets on integration reload or HA restart.
+It is also available in debug logs under
+`custom_components.magic_climate.diagnostics`. Downloads omit entity IDs, names,
+and unrelated source attributes, but include temperatures and schedule times;
+review them before sharing.
+
 ## Published state
 
 | Attribute | Example |

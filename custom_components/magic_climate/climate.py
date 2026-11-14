@@ -15,7 +15,8 @@ from homeassistant.const import (
     STATE_UNKNOWN,
     UnitOfTemperature,
 )
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.event import (
@@ -195,15 +196,18 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         # detection while the source confirms each setting.
         self._pending_apply: dict[str, Any] | None = None
         self._pending_apply_deadline: float = 0.0
+        self._applied_effective: str | None = None
+        self._deferred_schedule = False
+        self._restore_expected_preset: Preset | None = None
 
     async def async_added_to_hass(self) -> None:
         self._source_state = self.hass.states.get(self._source_entity_id)
-        await self._async_restore_preset()
         self.async_on_remove(
             async_track_state_change_event(
                 self.hass, [self._source_entity_id], self._handle_source_change
             )
         )
+        await self._async_restore_preset()
         self.async_on_remove(
             self._entry.add_update_listener(self._handle_entry_update)
         )
@@ -244,24 +248,29 @@ class MagicClimate(ClimateEntity, RestoreEntity):
             return
 
         self._attr_preset_mode = restored
-        # No guard window: this run pushed nothing, so the very next source
-        # event should be judged on its merits.
+        self._applied_effective = last.attributes.get("effective_preset") or preset.name
+        previous = self._presets.get(self._applied_effective) or preset
+        self._deferred_schedule = (
+            restored == AUTO_PRESET and previous.name != preset.name
+        )
+        self._entry.runtime_data.record(
+            "preset_restored", preset=restored, effective_preset=previous.name,
+            schedule_pending=self._deferred_schedule,
+        )
+        # Reconstruct the old band's expectation, not the new schedule's band.
+        # A changed source still belongs to its manual owner after a restart.
+        if not self.available:
+            self._restore_expected_preset = previous
+            return
         self._pending_apply = {
-            "temp_kwargs": self._planned_push(preset),
-            "fan": preset.fan,
+            "temp_kwargs": self._planned_push(previous), "fan": previous.fan,
         }
         self._pending_apply_deadline = 0.0
-
-        # A window boundary crossed while HA was down leaves the source
-        # holding a different band. Drift would read that as a manual
-        # override and silently drop the preset, so reconcile it here.
-        if last.attributes.get("effective_preset") not in (None, preset.name):
-            _LOGGER.debug(
-                "Schedule moved while down; re-applying %r on %s",
-                restored,
-                self._source_entity_id,
-            )
-            await self._async_apply_preset(restored)
+        differences = self._drift()
+        if differences:
+            self._clear_preset("source_changed_during_restart", differences=differences)
+        elif self._deferred_schedule:
+            await self._async_apply_preset(restored, reason="restart_recovery")
 
     async def _handle_entry_update(
         self, hass: HomeAssistant, entry: ConfigEntry
@@ -282,24 +291,57 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         self._presets = _load_presets(entry)
         self._schedule = _load_schedule(entry, self._presets)
         self._scheduled = self._schedule.resolve(dt_util.now())
+        self._deferred_schedule = False
+        self._entry.runtime_data.record("options_updated")
         if self._attr_preset_mode and self._attr_preset_mode not in (
             self.preset_modes or []
         ):
-            self._attr_preset_mode = None
-            self._pending_apply = None
+            self._clear_preset("preset_disabled")
         self.async_write_ha_state()
 
-    @callback
-    def _handle_source_change(self, event: Event) -> None:
+    def _clear_preset(self, reason: str, **details: Any) -> None:
+        self._entry.runtime_data.record(
+            "preset_cleared", reason=reason, preset=self._attr_preset_mode,
+            temperature_unit=self._source_unit, **details,
+        )
+        self._attr_preset_mode = None
+        self._applied_effective = None
+        self._pending_apply = None
+        self._deferred_schedule = False
+        self._restore_expected_preset = None
+
+    async def _handle_source_change(self, event: Event) -> None:
+        was_available = self.available
         self._source_state = event.data.get("new_state")
+        if self.available != was_available:
+            self._entry.runtime_data.record("source_availability", available=self.available)
+
+        if not self.available:
+            self.async_write_ha_state()
+            return
+
+        if self._restore_expected_preset is not None:
+            previous = self._restore_expected_preset
+            self._restore_expected_preset = None
+            self._pending_apply = {
+                "temp_kwargs": self._planned_push(previous), "fan": previous.fan,
+            }
+            self._pending_apply_deadline = 0.0
 
         if self._attr_preset_mode is not None:
-            if self._still_within_guard_window():
-                # Wrapper-initiated change; do not clear preset_mode.
-                pass
-            elif self._has_drifted():
-                self._attr_preset_mode = None
-                self._pending_apply = None
+            # A reconnect must be checked even if the outage was shorter than
+            # the echo guard: a wall thermostat may have taken ownership.
+            if not was_available or not self._still_within_guard_window():
+                differences = self._drift()
+                if differences:
+                    self._clear_preset("source_changed", differences=differences)
+
+            if self._attr_preset_mode == AUTO_PRESET and self._deferred_schedule:
+                self._deferred_schedule = False
+                if self._schedule.resolve(dt_util.now()) != self._applied_effective:
+                    await self._async_apply_preset(AUTO_PRESET, reason="source_recovery")
+                else:
+                    self._entry.runtime_data.record("schedule_recovery_no_change")
 
         self.async_write_ha_state()
 
@@ -309,27 +351,24 @@ class MagicClimate(ClimateEntity, RestoreEntity):
             and time.monotonic() < self._pending_apply_deadline
         )
 
-    def _has_drifted(self) -> bool:
-        """True if the source's reported state no longer matches what we pushed."""
+    def _drift(self) -> dict[str, Any]:
+        """Declared properties that no longer match the last command."""
         if self._pending_apply is None or self._source_state is None:
-            return False
+            return {}
 
         expected = self._pending_apply
         attrs = self._source_state.attributes
-
-        # Temperature check
+        differences = {}
         for key, expected_val in expected["temp_kwargs"].items():
             actual = attrs.get(key)
-            if actual is None:
-                continue  # source doesn't expose this attribute in this mode
-            if abs(actual - expected_val) > DRIFT_TOLERANCE:
-                return True
+            if actual is not None and abs(actual - expected_val) > DRIFT_TOLERANCE:
+                differences[key] = {"expected": expected_val, "actual": actual}
 
-        # Fan check
         if expected["fan"] is not None and attrs.get("fan_mode") != expected["fan"]:
-            return True
-
-        return False
+            differences["fan_mode"] = {
+                "expected": expected["fan"], "actual": attrs.get("fan_mode"),
+            }
+        return differences
 
     # --------------------------------------------------------------- schedule
 
@@ -375,19 +414,16 @@ class MagicClimate(ClimateEntity, RestoreEntity):
             return
         previous, self._scheduled = self._scheduled, scheduled
 
-        if (
-            self._attr_preset_mode == AUTO_PRESET
-            and self._schedule.moves_home
-            and self.available
-        ):
-            _LOGGER.debug(
-                "Schedule moved %s -> %s; re-applying %r on %s",
-                previous,
-                scheduled,
-                AUTO_PRESET,
-                self._source_entity_id,
-            )
-            await self._async_apply_preset(AUTO_PRESET)
+        if self._attr_preset_mode == AUTO_PRESET and self._schedule.moves_home:
+            if not self.available:
+                self._deferred_schedule = True
+                self._entry.runtime_data.record(
+                    "schedule_deferred", previous=previous, scheduled=scheduled,
+                    reason="source_unavailable",
+                )
+                self.async_write_ha_state()
+            else:
+                await self._async_apply_preset(AUTO_PRESET, reason="schedule_boundary")
         else:
             self.async_write_ha_state()
 
@@ -395,20 +431,16 @@ class MagicClimate(ClimateEntity, RestoreEntity):
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Which band is really applied, and when peak next moves.
 
-        `effective_preset` is the one attribute that always publishes: while
-        Home is held it is the only way to see which band the schedule chose,
-        and the restart path reads it back to tell a crossed boundary apart
-        from a manual override.
+        `effective_preset` reports the last band applied, not a band that
+        the schedule wanted but could not send during an outage. The restart
+        path uses it to reconstruct the previous expectation.
 
         Peak is additionally published as clock times and absolute next
         occurrences, because a consumer that wants to pre-cool needs to know
         *when* peak starts, not just whether it is running. These change at
         most a few times a day, so they do not churn the recorder.
         """
-        effective = None
-        if self._attr_preset_mode is not None:
-            preset = self._effective_preset(self._attr_preset_mode)
-            effective = preset.name if preset else None
+        effective = self._applied_effective
 
         attrs: dict[str, Any] = {
             "peak_active": False,
@@ -717,25 +749,13 @@ class MagicClimate(ClimateEntity, RestoreEntity):
         return temp_kwargs
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        await self.hass.services.async_call(
-            "climate", "set_hvac_mode",
-            {"entity_id": self._source_entity_id, "hvac_mode": hvac_mode},
-            blocking=True,
-        )
+        await self._async_command("set_hvac_mode", {"hvac_mode": hvac_mode})
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
-        await self.hass.services.async_call(
-            "climate", "set_fan_mode",
-            {"entity_id": self._source_entity_id, "fan_mode": fan_mode},
-            blocking=True,
-        )
+        await self._async_command("set_fan_mode", {"fan_mode": fan_mode})
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
-        await self.hass.services.async_call(
-            "climate", "set_swing_mode",
-            {"entity_id": self._source_entity_id, "swing_mode": swing_mode},
-            blocking=True,
-        )
+        await self._async_command("set_swing_mode", {"swing_mode": swing_mode})
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         if preset_mode not in (self.preset_modes or []):
@@ -775,48 +795,71 @@ class MagicClimate(ClimateEntity, RestoreEntity):
             for key, val in temp_kwargs.items()
         }
 
-    async def _async_apply_preset(self, preset_mode: str) -> None:
-        """Push `preset_mode`, resolving Home to whatever the clock calls for.
+    async def _async_command(self, service: str, values: dict[str, Any]) -> None:
+        """Record commands without treating HA acceptance as hardware confirmation."""
+        try:
+            # HA can silently skip an unavailable service target. Check each
+            # command afresh, including the fan after a temperature write.
+            source = self.hass.states.get(self._source_entity_id)
+            if source is None or source.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                raise HomeAssistantError("Magic Climate source is unavailable")
+            self._entry.runtime_data.record(
+                "command_sent", service=service, values=values,
+                temperature_unit=self._source_unit,
+            )
+            await self.hass.services.async_call(
+                "climate", service,
+                {"entity_id": self._source_entity_id, **values}, blocking=True,
+            )
+        except Exception as err:
+            self._entry.runtime_data.record(
+                "command_failed", service=service, error=type(err).__name__,
+                temperature_unit=self._source_unit,
+            )
+            raise
 
-        `preset_mode` is what gets *reported* afterwards; `preset` is what
-        actually gets pushed. Keeping them separate is what stops the
-        schedule from feeding back: preset_mode stays "home" across every
-        boundary, so no automation sees an event, and drift is measured
-        against the values really sent rather than the Comfort band.
-        """
+    async def _async_apply_preset(self, preset_mode: str, *, reason: str = "user") -> None:
+        """Apply once; failures relinquish ownership, never roll back or retry."""
         preset = self._effective_preset(preset_mode)
         if preset is None:
             _LOGGER.warning("Unknown preset: %r", preset_mode)
             return
 
-        # 1. Push temperatures, denormalized for the source unit. The source-
-        # unit values are what the source will echo back on its next state
-        # event, so store those for drift comparison too.
+        self._entry.runtime_data.record(
+            "preset_requested", reason=reason, preset=preset_mode,
+            effective_preset=preset.name,
+        )
         pushed_temp_kwargs = self._planned_push(preset)
-        if pushed_temp_kwargs:
-            await self.hass.services.async_call(
-                "climate", "set_temperature",
-                {"entity_id": self._source_entity_id, **pushed_temp_kwargs},
-                blocking=True,
-            )
-
-        # 2. Push fan (if declared).
-        if preset.fan is not None and self.fan_mode != preset.fan:
-            await self.hass.services.async_call(
-                "climate", "set_fan_mode",
-                {"entity_id": self._source_entity_id, "fan_mode": preset.fan},
-                blocking=True,
-            )
-
-        # Store the preset's *declared* fan (possibly None). Drift is measured
-        # only against properties the preset actually specifies — nudging the
-        # fan does not exit a band-only preset.
+        self._deferred_schedule = False
+        # Arm before writing: a source can echo the temperature while the
+        # following fan command is still in flight.
         self._pending_apply = {
-            "temp_kwargs": dict(pushed_temp_kwargs),
-            "fan": preset.fan,
+            "temp_kwargs": dict(pushed_temp_kwargs), "fan": preset.fan,
         }
         self._pending_apply_deadline = time.monotonic() + APPLY_GUARD_SECONDS
+        try:
+            if pushed_temp_kwargs:
+                await self._async_command("set_temperature", pushed_temp_kwargs)
+            if preset.fan is not None and self.fan_mode != preset.fan:
+                await self._async_command("set_fan_mode", {"fan_mode": preset.fan})
+        except Exception:
+            self._clear_preset("apply_failed", requested_preset=preset_mode)
+            self.async_write_ha_state()
+            if reason == "user":
+                raise
+            _LOGGER.warning(
+                "Could not apply %s on %s after %s; preset released",
+                preset_mode, self._source_entity_id, reason,
+            )
+            return
+
+        self._pending_apply_deadline = time.monotonic() + APPLY_GUARD_SECONDS
         self._attr_preset_mode = preset_mode
+        self._applied_effective = preset.name
+        self._entry.runtime_data.record(
+            "preset_applied", reason=reason, preset=preset_mode,
+            effective_preset=preset.name,
+        )
         self.async_write_ha_state()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
@@ -827,16 +870,14 @@ class MagicClimate(ClimateEntity, RestoreEntity):
                 self.hvac_mode,
             )
             return
-        data: dict[str, Any] = {"entity_id": self._source_entity_id}
+        data: dict[str, Any] = {}
         for key in ("temperature", "target_temp_low", "target_temp_high"):
             if key in kwargs:
                 data[key] = self._denormalize_temp(kwargs[key])
         if "hvac_mode" in kwargs:
             data["hvac_mode"] = kwargs["hvac_mode"]
         self._reshape_set_temperature_for_source(data)
-        await self.hass.services.async_call(
-            "climate", "set_temperature", data, blocking=True,
-        )
+        await self._async_command("set_temperature", data)
 
     def _reshape_set_temperature_for_source(self, data: dict[str, Any]) -> None:
         """Rewrite a manual set_temperature payload to match source flags.
